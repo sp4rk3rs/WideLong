@@ -1,0 +1,23 @@
+# Build output and test scratch
+work/
+output/
+**/bin/
+**/obj/
+.vs/
+*.user
+
+# Datasets: never commit real data
+*.csv
+*.tsv
+*.sas7bdat
+*.rds
+*.xlsx
+*.duckdb
+*.db
+*.dmp
+
+# Logs and exports
+scripts/build.log
+stress-output/
+*.zip
+*.log

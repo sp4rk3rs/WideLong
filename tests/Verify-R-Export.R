@@ -1,0 +1,10 @@
+# Run with the extracted synthetic test export folder as the sole argument.
+args <- commandArgs(trailingOnly = TRUE)
+stopifnot(length(args) == 1L)
+setwd(args[[1]])
+source("import.R")
+stopifnot(identical(data$id, c("001", "002")))
+stopifnot(identical(data$score, c(2.5, NA_real_)))
+stopifnot(inherits(data$date, "Date"), as.character(data$date[1]) == "2025-01-01", is.na(data$date[2]))
+stopifnot(identical(data$flag, c(TRUE, NA)))
+cat("PASS: generated R import preserves text IDs, numeric values, dates, Booleans, and missing values.\n")
