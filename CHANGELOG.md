@@ -2,6 +2,12 @@
 
 Each release records concrete behavior changes, verification, and relevant limitations. Entries for 0.1.0–0.3.1 were expanded retrospectively from their retained startup guides and the 0.3.1 verification report. Historical interface labels and defaults below describe those releases; 0.4.0 replaces several of them. Exact older release dates and unrecorded test counts are intentionally omitted.
 
+## Logo refresh â€” 2026-11-09
+
+- Replaced the header logo and Windows application/window icon with the supplied W/L monogram, traced as clean geometric shapes. The original dark purple (#540C9E) and light purple (#A26CDE) were sampled from the JPEG; both fills are uniform. Outer edges and two transparent slots are aligned, with consistent small rounded outer corners and no background or stray lines.
+- The header now embeds a transparent PNG instead of the former JPEG. The Windows icon includes nine sizes from 16 through 256 pixels. Editable SVG, 2048-pixel PNG and ICO are retained under Codex/output/branding; the previous assets and application files are backed up under Codex/work/logo-refresh-2026-11-09/backup.
+- Verification: the Release build succeeded; the rebuilt files replace the existing 0.5.3 distribution used by Start WideLong.cmd. Visual inspection of the rebuilt app confirmed the new header and title-bar icon in an empty session; PNG alpha samples verified transparent background and slots, and fully opaque sampled purple interiors. This changes branding only; data handling and export behavior are unchanged. Build intermediates and logs for this change remain under Codex/work.
+
 ## 0.5.3 — 2026-11-07
 
 - Renamed to **WideLong** (formerly Data Helper). The header shows "Wide" in the dark accent purple and "Long" in a lighter purple; the window title, dialogs, export READMEs and generated script headers use the new name. The program is now `WideLong.exe` in `output/WideLong-0.5.3`; the source folder (`app/WideLong`), projects (`WideLong.csproj`, `WideLong.Tests.csproj`), C# namespace and test environment variables (`WIDELONG_RSCRIPT`, `WIDELONG_STRESS_SUBSET`) use the new name. Entries below describe the app under its earlier name.

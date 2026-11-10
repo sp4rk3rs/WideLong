@@ -8,6 +8,11 @@
     <AssemblyName>WideLong</AssemblyName>
     <Version>0.5.3</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets/WideLong.ico</ApplicationIcon>
     <NuGetAudit>false</NuGetAudit>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="../../Codex/output/branding/WideLongLogo.png" Link="Assets/WideLongLogo.png" />
+    <Resource Include="Assets/WideLong.ico" />
+  </ItemGroup>
 </Project>

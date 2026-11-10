@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Codex/output/branding/WideLongLogo.png" alt="WideLong logo" width="180">
+</p>
+
 # WideLong
 
 Combine CSV files, reshape between wide and long, clean values, and export the dataset with readable R or SAS code that rebuilds it from the original files.
