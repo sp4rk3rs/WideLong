@@ -29,7 +29,7 @@ internal static class RCode
         void L(string line = "") => body.Append(CodeModel.Wrap(line, false)).Append('\n');
         void Note(string text) => body.Append("# ").Append(text).Append('\n');
 
-        var objects = m.ObjectNames(40, ["items", "partner", "roles", "prepared", "long", "ids", "keys", "key", "folder", "read_text", "yes_no", "as_text", "stack_columns", "spread", "as_row", "context", "num", "dates", "flags", "text_cols", "v", "m", "i", "rows", "hit"]);
+        var objects = m.ObjectNames(40, ["items", "prepared", "long", "ids", "keys", "key", "folder", "read_text", "yes_no", "as_text", "stack_columns", "spread", "as_row", "context", "num", "dates", "flags", "text_cols", "v", "m", "i", "rows", "hit"]);
         string Obj(FilePlan f) => objects[m.Files.IndexOf(f)];
 
         // ---- 2. Clean each file ----
@@ -368,25 +368,6 @@ internal static class RCode
                 index = end;
             }
             columns.Clear(); columns.AddRange(m.Raw.Fields.Select(f => f.Name));
-        }
-        else if (m.Plan.Layout == Layout.Dyad)
-        {
-            needKey = true;
-            var roles = Engine.DyadPair(Engine.Roles(m.Plan.Session), m.Plan.Session.DyadRoles);
-            var partnerFields = m.Raw.Fields.Where(f => f.Key.EndsWith(Engine.PartnerSuffix, StringComparison.Ordinal)).ToList();
-            var from = partnerFields.Select(f => m.Labels[f.Key[..^Engine.PartnerSuffix.Length]]).ToList();
-            string pE = Col("prepared", e), qE = Col("partner", e);
-            L(); L($"# ---- Dyads: {roles[0]} and {roles[1]} rows, each with the partner's values in *_partner columns ----");
-            L($"roles <- {Vec(roles)}");
-            L($"prepared <- prepared[{pE} %in% roles, ]");
-            if (partnerFields.Count > 0)
-            {
-                L($"partner <- prepared");
-                L($"{qE} <- roles[match({qE}, rev(roles))]  # look up each row's partner: {roles[0]} <-> {roles[1]}");
-                L($"i <- match(key({idCol}, {pE}, {gCol}), key({Col("partner", id)}, {qE}, {Col("partner", g)}))");
-                L($"prepared[{Vec(partnerFields.Select(f => f.Name))}] <- partner[i, {Vec(from)}]");
-                columns.AddRange(partnerFields.Select(f => f.Name));
-            }
         }
         else if (measurement)
         {

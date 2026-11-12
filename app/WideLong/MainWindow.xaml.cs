@@ -500,7 +500,7 @@ public partial class MainWindow : Window
         var nameBox = options.Input("Dataset name", suggested);
         var nameHint = new TextBlock { FontSize = 11, Foreground = (Brush)FindResource("Muted"), Margin = new(0, 4, 0, 4), TextWrapping = TextWrapping.Wrap }; options.Add(nameHint);
         var shapes = new List<(string Label, Layout? Shape)> { ("Wide", Layout.Person), ("Long", Layout.PersonTime), ("Both — wide and long (ZIP)", null) };
-        if (layout is Layout.Measurement or Layout.Source or Layout.Dyad) shapes.Add((ShapeName(layout), layout));
+        if (layout is Layout.Measurement or Layout.Source) shapes.Add((ShapeName(layout), layout));
         Layout? chosen = layout; Action refresh = () => { };
         foreach (var item in shapes) {
             bool current = item.Shape == layout;

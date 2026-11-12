@@ -1,6 +1,6 @@
 using WideLong;
 
-/// <summary>0.6.0 features: import presets, saved recipes, value labels, scale scores and the dyad layout. Fictional data only.</summary>
+/// <summary>0.6.0 features: import presets, saved recipes, value labels and scale scores. Fictional data only.</summary>
 public static class FeatureChecks
 {
     public const string Qualtrics = "StartDate,ResponseId,Q1,Q2\n\"Start Date\",\"Response ID\",\"How are you?\nPick one\",\"Age\"\n\"{\"\"ImportId\"\":\"\"startDate\"\"}\",\"{\"\"ImportId\"\":\"\"_recordId\"\"}\",\"{\"\"ImportId\"\":\"\"QID1\"\"}\",\"{\"\"ImportId\"\":\"\"QID2\"\"}\"\n2025-01-01,R_1,3,40\n2025-01-02,R_2,1,35\n";
@@ -15,16 +15,6 @@ public static class FeatureChecks
         Scales.Add(s, new ScaleScore { Name = "wellbeing", Items = ["q1", "q2", "q3"], Reversed = ["q2"], ReverseMin = 1, ReverseMax = 5, Method = ScaleMethod.Mean, MinItems = 2 });
         Scales.Add(s, new ScaleScore { Name = "total", Items = ["q1", "q3"], Method = ScaleMethod.Sum, MinItems = 1 });
         return new() { Sources = [s] };
-    }
-    /// <summary>Patient/spouse/informant rows over two visits, plus an ID-level file.</summary>
-    public static Session DyadFixture(bool chooseRoles = true)
-    {
-        var roles = Csv.Import("id,person,visit,mood\n1,Patient,m0,3\n1,Spouse,m0,4\n1,Informant,m0,2\n1,Patient,m3,5\n2,Patient,m0,1\n2,Spouse,m0,2\n2,Spouse,m3,3\n", "dyad_mood.csv");
-        roles.IdColumn = 0; roles.EntityColumn = 1; roles.TimeColumn = 2; RegressionChecks.Convert(roles, 3, ValueKind.Number);
-        var site = Csv.Import("id,site\n1,North\n2,South\n", "dyad_site.csv"); site.IdColumn = 0;
-        var data = new Session { Sources = [roles, site] };
-        if (chooseRoles) data.DyadRoles = ["Patient", "Spouse"];
-        return data;
     }
 
     public static void Run(Action<string, Action> test, Action<bool> assert)
@@ -59,18 +49,6 @@ public static class FeatureChecks
             assert(Rejected(() => Scales.Add(s, new ScaleScore { Name = "bad", Items = ["q1", "note"] })));
             assert(Rejected(() => Scales.Add(s, new ScaleScore { Name = "wellbeing", Items = ["q1", "q3"] })));
             var copy = s.Copy(); Scales.Remove(copy, copy.Scales[0]); Equal(6, copy.Fields.Count); Equal("9", copy.Rows[0][5]); Equal(2, s.Scales.Count);
-        });
-        test("Dyads pair two roles with partner columns for role-specific variables only", () =>
-        {
-            var data = DyadFixture(); var view = Engine.Build(data, Layout.Dyad);
-            Equal("id,person,visit,mood,site,mood_partner", string.Join(",", view.Fields.Select(f => f.Name)));
-            Equal("1|Patient|m0|3|North|4;1|Patient|m3|5|North|;1|Spouse|m0|4|North|3;2|Patient|m0|1|South|2;2|Spouse|m0|2|South|1;2|Spouse|m3|3|South|",
-                string.Join(";", view.Rows.Select(r => string.Join("|", r.Select(c => c.Value)))));
-            assert(Rejected(() => Engine.Build(DyadFixture(false), Layout.Dyad)));
-            Equal("Patient,Spouse,Informant", string.Join(",", Engine.Roles(data)));
-            var plan = Recipe.Plan(data, Layout.Dyad, MatchMode.AllPeople, false, null, new ViewPreferences(), "");
-            assert(plan.Columns.Any(c => c.Role == "partner") && SasRecipe.Generate(plan).Contains("create table dyad", StringComparison.Ordinal));
-            assert(Rejected(() => Engine.Build(new Session { Sources = [Csv.Import("id,x\n1,2\n", "plain.csv")] }, Layout.Dyad)));
         });
         test("Value labels travel to the dictionary, R factors and SAS formats", () =>
         {

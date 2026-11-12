@@ -52,7 +52,7 @@ public static class RegressionChecks
     }
     public static Session ReplacedFilterFixture()
     {
-        var s = Csv.Import("id,person,score\n1,Patient,5\n1,Spouse,6\n1,Informant,7\n", "dyad_roles.csv"); s.IdColumn = 0; s.EntityColumn = 1;
+        var s = Csv.Import("id,person,score\n1,Patient,5\n1,Spouse,6\n1,Informant,7\n", "role_scores.csv"); s.IdColumn = 0; s.EntityColumn = 1;
         s.KeepRules.Add(new(1, ["Patient", "Spouse"], false));
         Replace(s, 1, "Spouse", "Caregiver");
         return new() { Sources = [s] };

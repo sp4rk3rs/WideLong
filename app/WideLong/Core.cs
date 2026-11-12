@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 namespace WideLong;
 
 public enum ValueKind { Text, Number, Date, Boolean }
-public enum Layout { PersonTime, Person, Measurement, Source, Dyad }
+public enum Layout { PersonTime, Person, Measurement, Source }
 public enum MatchMode { AllPeople, CommonPeople, FirstFilePeople }
 public enum StepKind { Cell, Replace, Convert }
 /// <param name="RestoreMissing">A Convert step that also set the variable's missing codes; PriorFieldMissing is what a revert restores.</param>
@@ -77,9 +77,7 @@ public sealed class Session
     public bool HasEntity => Sources.Any(source => source.EntityColumn >= 0);
     /// <summary>Time/grouping values in the order chosen by the user (Order time values…). Values not listed follow in data order.</summary>
     public List<string> TimeOrder { get; set; } = [];
-    /// <summary>The two additional-key values (roles) paired by the Dyad layout, for example Patient and Spouse.</summary>
-    public List<string> DyadRoles { get; set; } = [];
-    public Session Copy(bool includeOriginals = true) => new() { Sources = Sources.Select(s => s.Copy(includeOriginals)).ToList(), TimeOrder = [.. TimeOrder], DyadRoles = [.. DyadRoles] };
+    public Session Copy(bool includeOriginals = true) => new() { Sources = Sources.Select(s => s.Copy(includeOriginals)).ToList(), TimeOrder = [.. TimeOrder] };
 }
 
 public sealed record Origin(string SourceKey, int Row, int Column);
@@ -539,7 +537,6 @@ public static class Engine
             sourceRecords.Add(records);
         }
         var selectedRows = rowVariables?.ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
-        if (stack && layout == Layout.Dyad) throw new InvalidOperationException("Dyads pair the records of two roles, so they need Match IDs and groups rather than stacking.");
         if (stack) return Stack(session, sourceRecords, variables, layout, selectedRows);
 
         var idSets = sourceRecords.Select(rs => rs.Select(r => r.Id).ToHashSet(StringComparer.Ordinal)).ToList();
@@ -553,7 +550,7 @@ public static class Engine
             var all = indexes.SelectMany(index => index.TryGetValue(id, out var rs) ? rs : []).ToList();
             merged.AddRange(MergeIdRecords(id, all));
         }
-        var view = Render(merged, variables, layout, selectedRows, SchemaNaming.IdName(session), SchemaNaming.GroupName(session), session.HasEntity ? SchemaNaming.EntityName(session) : null, KeyKinds(session), session.TimeOrder, layout == Layout.Dyad && session.HasEntity ? DyadPair(Roles(session), session.DyadRoles) : null);
+        var view = Render(merged, variables, layout, selectedRows, SchemaNaming.IdName(session), SchemaNaming.GroupName(session), session.HasEntity ? SchemaNaming.EntityName(session) : null, KeyKinds(session), session.TimeOrder);
         int missingPeople = ids.Count(id => idSets.Any(set => !set.Contains(id)));
         int allPeople = idSets.SelectMany(s => s).Distinct(StringComparer.Ordinal).Count();
         view.Notes.Add($"{ids.Count:N0} IDs included · {allPeople - ids.Count:N0} excluded by matching rule · {missingPeople:N0} missing from at least one file");
@@ -713,24 +710,6 @@ public static class Engine
         return ordered.Select((t, i) => (t, i)).ToDictionary(x => x.t, x => x.i, StringComparer.Ordinal);
     }
 
-    public const string PartnerSuffix = "\u001fpartner";
-    /// <summary>The two roles a Dyad layout pairs: the chosen ones, or the only two that occur.</summary>
-    public static List<string> DyadPair(IEnumerable<string> entities, IReadOnlyList<string>? chosen)
-    {
-        var present = entities.Where(e => e.Length > 0).Distinct(StringComparer.Ordinal).ToList();
-        if (chosen is { Count: 2 } && chosen[0] != chosen[1]) return [chosen[0], chosen[1]];
-        if (present.Count == 2) return present;
-        throw new InvalidOperationException(present.Count < 2 ? "The Dyad layout needs two roles in the additional key; fewer were found." : $"Choose which two of the {present.Count} roles ({string.Join(", ", present.Take(5))}{(present.Count > 5 ? ", …" : "")}) to pair: Dyad roles… next to the layout buttons.");
-    }
-    /// <summary>The additional-key values (roles) of the combined data, for choosing a dyad.</summary>
-    public static List<string> Roles(Session session)
-    {
-        var roles = new List<string>();
-        foreach (var s in session.Sources.Where(s => s.EntityColumn >= 0 && s.EntityColumn < s.Fields.Count))
-            for (int r = 0; r < s.Rows.Count; r++) { string v = s.Rows[r][s.EntityColumn]; if (s.Keeps(r) && v.Length > 0 && !s.IsMissing(v, s.EntityColumn) && !roles.Contains(v, StringComparer.Ordinal)) roles.Add(v); }
-        return roles;
-    }
-
     /// <summary>The time/grouping values of the combined data, in the order wide columns use. For the Order time values dialog.</summary>
     public static List<string> TimeValues(Session session, MatchMode match = MatchMode.AllPeople)
     {
@@ -745,7 +724,7 @@ public static class Engine
         return seen;
     }
 
-    private static View Render(List<Record> records, List<Variable> variables, Layout layout, HashSet<string> selectedRows, string idName, string groupName, string? entityName, KeyKindSet? keyKinds = null, IReadOnlyList<string>? timeOrder = null, IReadOnlyList<string>? dyadRoles = null)
+    private static View Render(List<Record> records, List<Variable> variables, Layout layout, HashSet<string> selectedRows, string idName, string groupName, string? entityName, KeyKindSet? keyKinds = null, IReadOnlyList<string>? timeOrder = null)
     {
         keyKinds ??= new(ValueKind.Text, ValueKind.Text, ValueKind.Text);
         // Keep variables adjacent by source; qualify only collisions and reserve structural names.
@@ -765,32 +744,7 @@ public static class Engine
         view.Fields.Add(new(idName, keyKinds.Id, "ID", "@person_id"));
         if (entityName != null && layout != Layout.Person) view.Fields.Add(new(entityName, keyKinds.Entity, "additional key", "@entity"));
         Cell[] Keys(Record row) => entityName == null ? [new(row.Id), new(row.Time)] : [new(row.Id), new(row.Entity), new(row.Time)];
-        if (layout == Layout.Dyad)
-        {
-            if (entityName == null) throw new InvalidOperationException("The Dyad layout pairs two roles of the same ID (for example patient and spouse). Choose an additional key such as person or role in ID / grouping first.");
-            var roles = dyadRoles is { Count: 2 } ? dyadRoles : DyadPair(records.Select(r => r.Entity), null);
-            view.Fields.Add(new(groupName, keyKinds.Time, "grouping", "@time"));
-            view.Fields.AddRange(variables.Select(v => new OutputField(labels[v.Key], v.Kind, v.Source, v.Key) { Labels = v.Labels }));
-            // Only role-specific variables get a partner copy; ID-level values are the same for both partners.
-            var partners = variables.Where(v => v.EntityBound).ToList();
-            var names = view.Fields.Select(f => f.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var v in partners)
-            {
-                string name = labels[v.Key] + "_partner", candidate = name; int suffix = 2;
-                while (!names.Add(candidate)) candidate = name + "_" + suffix++;
-                view.Fields.Add(new(candidate, v.Kind, v.Source + " (partner)", v.Key + PartnerSuffix) { Labels = v.Labels });
-            }
-            var byKey = records.Where(r => roles.Contains(r.Entity, StringComparer.Ordinal)).ToDictionary(r => (r.Id, r.Entity, r.Time));
-            foreach (var row in records)
-            {
-                if (!roles.Contains(row.Entity, StringComparer.Ordinal)) continue;
-                byKey.TryGetValue((row.Id, row.Entity == roles[0] ? roles[1] : roles[0], row.Time), out var partner);
-                view.Rows.Add(Keys(row).Concat(variables.Select(v => row.Values.TryGetValue(v.Key, out var cell) ? cell : Cell.Empty))
-                    .Concat(partners.Select(v => partner != null && partner.Values.TryGetValue(v.Key, out var cell) ? cell : Cell.Empty)).ToArray());
-            }
-            view.Notes.Add($"Dyads: {roles[0]} and {roles[1]} rows of each ID and {groupName}, each with the partner's values in *_partner columns.");
-        }
-        else if (layout == Layout.Measurement)
+        if (layout == Layout.Measurement)
         {
             var stacked = variables.Where(v => selectedRows.Contains(v.Key)).ToList();
             var context = variables.Where(v => !selectedRows.Contains(v.Key)).ToList();

@@ -198,7 +198,7 @@ internal sealed class CodeModel
         return string.Join(", ", list.Take(max).Select(Show)) + (list.Count > max ? $" and {list.Count - max:N0} more" : "");
     }
     public static string KindWord(ValueKind kind) => kind switch { ValueKind.Number => "numbers", ValueKind.Date => "dates", ValueKind.Boolean => "true/false values", _ => "text" };
-    public static string ShapeWord(Layout layout) => layout switch { Layout.Person => "wide: one row per ID", Layout.PersonTime => "long: one row per ID and time", Layout.Measurement => "custom variable/value rows", Layout.Dyad => "dyads: one row per ID, role and time with partner columns", _ => "one file's rows" };
+    public static string ShapeWord(Layout layout) => layout switch { Layout.Person => "wide: one row per ID", Layout.PersonTime => "long: one row per ID and time", Layout.Measurement => "custom variable/value rows", _ => "one file's rows" };
 
     /// <summary>Breaks a long statement after commas (R) or spaces (SAS), never inside quotes or a trailing R comment.</summary>
     public static string Wrap(string line, bool sas, int width = 110)

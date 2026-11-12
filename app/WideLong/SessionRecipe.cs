@@ -49,7 +49,6 @@ public sealed class RecipeDocument
     public string App { get; set; } = "WideLong " + CodeModel.Version;
     public List<RecipeFile> Files { get; set; } = [];
     public List<string> TimeOrder { get; set; } = [];
-    public List<string> DyadRoles { get; set; } = [];
     public Layout Layout { get; set; } = Layout.PersonTime;
     public MatchMode Match { get; set; }
     public bool Stack { get; set; }
@@ -78,7 +77,7 @@ public static class SessionRecipes
                 Fields = s.Fields.Select(f => new RecipeField { Original = f.Original, Name = f.Name, Keep = f.Keep, Kind = f.Kind, Measure = f.Measure, Occasion = f.Occasion, MissingTokens = f.MissingTokens?.Order(StringComparer.Ordinal).ToArray(), ValueLabels = f.ValueLabels is { Count: > 0 } labels ? new(labels, StringComparer.Ordinal) : null }).ToList(),
                 Steps = [.. s.Steps], KeepRules = [.. s.KeepRules], Scales = s.Scales.Select(x => x.Copy()).ToList()
             }).ToList(),
-            TimeOrder = [.. session.TimeOrder], DyadRoles = [.. session.DyadRoles], Layout = layout, Match = match, Stack = stack, SelectedFile = selectedFile,
+            TimeOrder = [.. session.TimeOrder], Layout = layout, Match = match, Stack = stack, SelectedFile = selectedFile,
             Preferences = preferences.ToDictionary(p => p.Key, p => p.Value.Copy(), StringComparer.Ordinal), Search = search, Filter = filter.Copy()
         };
     }
@@ -134,7 +133,7 @@ public static class SessionRecipes
     /// <summary>Rebuilds a whole session. readFile returns the text and path of a recipe file (or throws when the user cancels).</summary>
     public static (Session Session, List<string> Notes) Open(RecipeDocument recipe, Func<RecipeFile, (string Text, string? Path)> readFile)
     {
-        var session = new Session { TimeOrder = [.. recipe.TimeOrder], DyadRoles = [.. recipe.DyadRoles] }; var notes = new List<string>();
+        var session = new Session { TimeOrder = [.. recipe.TimeOrder] }; var notes = new List<string>();
         foreach (var file in recipe.Files)
         {
             var (text, path) = readFile(file);

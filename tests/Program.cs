@@ -550,11 +550,9 @@ if(!string.IsNullOrWhiteSpace(rscript) && File.Exists(rscript))
         RunRCase("partial_id_conversion",RegressionChecks.PartialIdFixture(),Layout.PersonTime);
         RunRCase("replace_on_filtered_role",RegressionChecks.ReplacedFilterFixture(),Layout.PersonTime);
     });
-    Test("Native R reproduces scale scores and dyad partner columns",()=> {
+    Test("Native R reproduces scale scores",()=> {
         RunRCase("scale_scores_source",FeatureChecks.ScaleFixture(),Layout.Source);
         RunRCase("scale_scores_long",FeatureChecks.ScaleFixture(),Layout.PersonTime);
-        RunRCase("dyad_pairs",FeatureChecks.DyadFixture(),Layout.Dyad);
-        var two=FeatureChecks.DyadFixture(false); two.Sources[0].KeepRules.Add(new(1,["Patient","Spouse"],false)); RunRCase("dyad_inferred_roles",two,Layout.Dyad);
     });
     Test("Native R skips Qualtrics description rows",()=> {
         RunRCase("qualtrics_preset",FeatureChecks.QualtricsFixture(),Layout.Source,allowUnsupportedSas:true);

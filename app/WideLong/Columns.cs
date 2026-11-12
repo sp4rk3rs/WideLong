@@ -222,7 +222,7 @@ public partial class MainWindow
     private ContextMenu OutputMenu(OutputField field)
     {
         var resolved = ResolveField(field);
-        if (resolved is { } derived && derived.Source.IsDerived(derived.Column) && !field.Key.EndsWith(Engine.PartnerSuffix, StringComparison.Ordinal))
+        if (resolved is { } derived && derived.Source.IsDerived(derived.Column))
         {
             var scaleMenu = DerivedMenu(derived.Source, derived.Column);
             scaleMenu.Items.Insert(0, Menu("Rename this output column…", () => RenameOutput(field)));

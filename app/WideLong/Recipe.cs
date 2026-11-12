@@ -53,12 +53,6 @@ public static class Recipe
         {
             if (layout == Layout.Source) { int index = int.Parse(field.Key[(copy.Sources[sourceIndex].Key.Length + 1)..], CultureInfo.InvariantCulture); columns.Add(new(field, "source_col", SourceColumn: index)); continue; }
             if (field.Key.StartsWith('@')) { columns.Add(new(field, field.Key == "@person_id" ? "id" : field.Key[1..])); continue; }
-            if (field.Key.EndsWith(Engine.PartnerSuffix, StringComparison.Ordinal))
-            {
-                int partnerOf = Var(field.Key[..^Engine.PartnerSuffix.Length]);
-                if (partnerOf == 0) throw new InvalidOperationException("This partner column cannot be mapped back to a source variable.");
-                columns.Add(new(field, "partner", partnerOf)); continue;
-            }
             var parts = field.Key.Split("\u001ftime:", 2, StringSplitOptions.None);
             var entityParts = parts[0].Split("\u001fentity:", 2, StringSplitOptions.None);
             int variable = Var(entityParts[0]);

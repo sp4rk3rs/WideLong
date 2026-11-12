@@ -506,22 +506,6 @@ public static class SasRecipe
             L("quit;");
             current = "wide"; currentNames = wideNames; currentRaw = m.Raw.Fields.Select(x => x.Name).ToList(); helperCols = ["_first"];
         }
-        else if (m.Plan.Layout == Layout.Dyad)
-        {
-            var roles = Engine.DyadPair(Engine.Roles(plan.Session), plan.Session.DyadRoles);
-            var partnerFields = m.Raw.Fields.Where(x => x.Key.EndsWith(Engine.PartnerSuffix, StringComparison.Ordinal)).ToList();
-            var partnerNames = Names(partnerFields.Select(x => x.Name), currentNames.Concat(helperCols));
-            L(); L($"/* ---- Dyads: {roles[0]} and {roles[1]} rows, each with the partner's values in *_partner columns ---- */");
-            L("proc sql;");
-            L("  create table dyad as");
-            L("  select a.*" + string.Concat(partnerFields.Select((x, i) => $", b.{Lookup(m.Labels[x.Key[..^Engine.PartnerSuffix.Length]])} as {partnerNames[i]}")));
-            L("  from combined as a");
-            L($"       left join combined as b on b.{idN} = a.{idN} and b.{gN} = a.{gN} and b.{eN} = case a.{eN} when {Q(roles[0])} then {Q(roles[1])} else {Q(roles[0])} end");
-            L($"  where a.{eN} in ({Q(roles[0])}, {Q(roles[1])})");
-            L("  order by a._first, a._porder, a._order;");
-            L("quit;");
-            current = "dyad"; currentNames.AddRange(partnerNames); currentRaw.AddRange(partnerFields.Select(x => x.Name));
-        }
         else if (measurement)
         {
             var valueField = m.RawField("@value")!;

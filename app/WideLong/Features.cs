@@ -69,7 +69,7 @@ public partial class MainWindow
                 structuredFilter = recipe.Filter.Copy(); RowFilter.Text = recipe.Search; lastSearch = recipe.Search; VariableSearch.Clear();
                 CombineMode.SelectedIndex = recipe.Stack ? 1 : 0; MatchRule.SelectedIndex = (int)recipe.Match; ExampleLabel.Visibility = Visibility.Collapsed;
                 layout = recipe.Layout;
-                foreach (var radio in new[] { IdMode, TimeMode, SourceMode, DyadMode }) if (radio.Tag?.ToString() == recipe.Layout.ToString()) radio.IsChecked = true;
+                foreach (var radio in new[] { IdMode, TimeMode, SourceMode }) if (radio.Tag?.ToString() == recipe.Layout.ToString()) radio.IsChecked = true;
             }, $"Opened recipe {Path.GetFileName(picker.FileName)} · {opened.Sources.Count} file(s) rebuilt from the originals" + (notes.Count > 0 ? " · " + notes[0] : ""));
             if (notes.Count > 0) MessageBox.Show(this, string.Join("\n", notes) + "\n\nThe recorded steps were reapplied to the current files.", "Open recipe", MessageBoxButton.OK, MessageBoxImage.Information);
         }
