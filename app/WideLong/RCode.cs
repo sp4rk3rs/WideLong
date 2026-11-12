@@ -29,7 +29,7 @@ internal static class RCode
         void L(string line = "") => body.Append(CodeModel.Wrap(line, false)).Append('\n');
         void Note(string text) => body.Append("# ").Append(text).Append('\n');
 
-        var objects = m.ObjectNames(40, ["prepared", "long", "ids", "keys", "key", "folder", "read_text", "yes_no", "as_text", "stack_columns", "spread", "as_row", "context", "num", "dates", "flags", "text_cols", "v", "m", "i", "rows", "hit"]);
+        var objects = m.ObjectNames(40, ["items", "partner", "roles", "prepared", "long", "ids", "keys", "key", "folder", "read_text", "yes_no", "as_text", "stack_columns", "spread", "as_row", "context", "num", "dates", "flags", "text_cols", "v", "m", "i", "rows", "hit"]);
         string Obj(FilePlan f) => objects[m.Files.IndexOf(f)];
 
         // ---- 2. Clean each file ----
@@ -87,6 +87,34 @@ internal static class RCode
                         L($"{v} <- {Vec(convert.Cols.Select(c => names[c]))}");
                         string simple = convert.Tokens.Length == 0 && convert.From == ValueKind.Text && convert.Target is ValueKind.Number or ValueKind.Boolean ? (convert.Target == ValueKind.Number ? "as.numeric" : "yes_no") : $"function(x) {Expression("x")}";
                         L($"{o}[{v}] <- lapply({o}[{v}], {simple})");
+                        break;
+                    }
+                    case KeyNormalizeOp key:
+                    {
+                        string x = Col(o, names[key.Col]);
+                        Note(key.Target switch
+                        {
+                            ValueKind.Number => $"Matching column {names[key.Col]} as numbers (00001 -> 1); kept as text until the files are combined",
+                            ValueKind.Date => $"Matching column {names[key.Col]} as dates (written as {key.DateFormat}); kept as yyyy-mm-dd text until the files are combined",
+                            _ => $"Matching column {names[key.Col]} as true/false; kept as text until the files are combined"
+                        });
+                        if (key.Target == ValueKind.Boolean) needYesNo = true; else needAsText = true;
+                        L($"{x} <- " + key.Target switch
+                        {
+                            ValueKind.Number => $"as_text(as.numeric({x}))",
+                            ValueKind.Date => $"format(as.Date({x}, {Q(Recipe.RDateFormat(key.DateFormat))}), \"%Y-%m-%d\")",
+                            _ => $"tolower(yes_no({x}))"
+                        });
+                        break;
+                    }
+                    case ScaleOp scale:
+                    {
+                        var sc = scale.Scale; var itemNames = scale.Items.Select(c => names[c]).ToList();
+                        string range = (sc.ReverseMin + sc.ReverseMax).ToString(CultureInfo.InvariantCulture);
+                        Note($"Scale score {names[scale.Col]}: {sc.Method.ToString().ToLowerInvariant()} of {string.Join(", ", itemNames)}" + (sc.Reversed.Count > 0 ? $"; {string.Join(", ", sc.Reversed.Select(r => names[s.Fields.FindIndex(f => f.Original == r)]))} reverse-coded as {range} - x" : "") + $"; needs at least {sc.MinItems} answered item{(sc.MinItems == 1 ? "" : "s")}");
+                        L($"items <- {o}[{Vec(itemNames)}]");
+                        foreach (var reversed in sc.Reversed) { string name = names[s.Fields.FindIndex(f => f.Original == reversed)]; L($"items[[{Q(name)}]] <- {range} - items[[{Q(name)}]]"); }
+                        L($"{Col(o, names[scale.Col])} <- ifelse(rowSums(!is.na(items)) >= {sc.MinItems}, {(sc.Method == ScaleMethod.Sum ? "rowSums" : "rowMeans")}(items, na.rm = TRUE), NA_real_)");
                         break;
                     }
                     case MissingOp missing:
@@ -341,6 +369,25 @@ internal static class RCode
             }
             columns.Clear(); columns.AddRange(m.Raw.Fields.Select(f => f.Name));
         }
+        else if (m.Plan.Layout == Layout.Dyad)
+        {
+            needKey = true;
+            var roles = Engine.DyadPair(Engine.Roles(m.Plan.Session), m.Plan.Session.DyadRoles);
+            var partnerFields = m.Raw.Fields.Where(f => f.Key.EndsWith(Engine.PartnerSuffix, StringComparison.Ordinal)).ToList();
+            var from = partnerFields.Select(f => m.Labels[f.Key[..^Engine.PartnerSuffix.Length]]).ToList();
+            string pE = Col("prepared", e), qE = Col("partner", e);
+            L(); L($"# ---- Dyads: {roles[0]} and {roles[1]} rows, each with the partner's values in *_partner columns ----");
+            L($"roles <- {Vec(roles)}");
+            L($"prepared <- prepared[{pE} %in% roles, ]");
+            if (partnerFields.Count > 0)
+            {
+                L($"partner <- prepared");
+                L($"{qE} <- roles[match({qE}, rev(roles))]  # look up each row's partner: {roles[0]} <-> {roles[1]}");
+                L($"i <- match(key({idCol}, {pE}, {gCol}), key({Col("partner", id)}, {qE}, {Col("partner", g)}))");
+                L($"prepared[{Vec(partnerFields.Select(f => f.Name))}] <- partner[i, {Vec(from)}]");
+                columns.AddRange(partnerFields.Select(f => f.Name));
+            }
+        }
         else if (measurement)
         {
             var stackedFields = m.Raw.Fields.Where(f => f.Key == "@variable" || f.Key == "@value" || f.Key == "@source").ToList();
@@ -440,6 +487,12 @@ internal static class RCode
             F($"prepared <- prepared[order({args}), ]");
         }
         F("rownames(prepared) <- NULL");
+        var labelled = m.Plan.Columns.Select(c => c.Field).Where(Export.HasLabels).ToList();
+        if (labelled.Count > 0)
+        {
+            F("# Value labels, kept as a \"labels\" attribute (read by haven/labelled). For a factor: factor(x, levels = labels, labels = names(labels))");
+            foreach (var field in labelled) F($"attr({Col("prepared", field.Name)}, \"labels\") <- {Export.RLabelVector(field)}");
+        }
 
         // ---- Assemble ----
         var b = new StringBuilder();
@@ -467,12 +520,14 @@ internal static class RCode
             string extra = (f.Source.Fields.Count == 1 && f.Source.OriginalRows!.Any(r => r[0].Length == 0) ? ", keep_empty = TRUE" : "") + (f.Source.Delimiter == ',' ? "" : ", sep = " + Q(f.Source.Delimiter.ToString())) + (f.Source.EncodingName switch { "windows-1252" => ", encoding = \"CP1252\"", "UTF-16LE" => ", encoding = \"UTF-16LE\"", _ => "" });
             H($"{Obj(f).PadRight(pad)} <- read_text({Q(m.FileReference(f, portable).Replace('\\', '/'))}{extra})");
         }
+        foreach (var f in m.Files.Where(f => f.Source.SkipRows > 0))
+            H($"{Obj(f)} <- {Obj(f)}[-seq_len({f.Source.SkipRows}), , drop = FALSE]; rownames({Obj(f)}) <- NULL  # skip {f.Source.SkipRows} description row{(f.Source.SkipRows == 1 ? "" : "s")} under the header" + (ImportPresets.LooksLikeRedcap(f.Source) ? "" : f.Source.SkipRows == 2 ? " (Qualtrics)" : ""));
         H("stopifnot(" + string.Join(", ", m.Files.Select(f => $"nrow({Obj(f)}) == {f.Source.OriginalRows!.Count}")) + ")  # expected data rows; stops if a file changed");
         if (needYesNo || needAsText || needKey || needStackColumns || needSpread)
         {
             H(); H("# Small helpers used below");
             if (needYesNo) H("yes_no <- function(x) unname(c(true = TRUE, yes = TRUE, \"1\" = TRUE, false = FALSE, no = FALSE, \"0\" = FALSE)[tolower(x)])");
-            if (needAsText) H("as_text <- function(x) if (is.numeric(x)) ifelse(is.na(x), NA, formatC(x, digits = 15, format = \"fg\")) else if (is.logical(x)) tolower(x) else as.character(x)");
+            if (needAsText) H("as_text <- function(x) if (is.numeric(x)) ifelse(is.na(x), NA, trimws(formatC(x, digits = 15, format = \"fg\"))) else if (is.logical(x)) tolower(x) else as.character(x)");
             if (needKey) H("key <- function(...) paste(..., sep = \"\\r\")  # joins ID/person/time into one matching key");
             if (needStackColumns)
             {

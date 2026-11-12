@@ -13,15 +13,31 @@ public partial class MainWindow
         TimeMode.Content = "ID + " + group;
         ViewingBadge.Text = "Viewing: " + ShapeName(layout);
         RowVariablesButton.Visibility = layout == Layout.Measurement ? Visibility.Visible : Visibility.Collapsed;
+        DyadRolesButton.Visibility = layout == Layout.Dyad ? Visibility.Visible : Visibility.Collapsed;
         LayoutExplanation.Text = layout switch
         {
             Layout.Person => "Wide · One row per ID. Roles/entities and repeated observations get separate columns.",
             Layout.Measurement => "Choose variables to place in variable/value rows. Other variables keep their own columns.",
             Layout.Source => "Rows from one source file. Edits change the working copy; originals stay untouched.",
+            Layout.Dyad => "Dyads · One row per ID + role + " + SchemaNaming.GroupName(session) + " for two roles, with the partner's values in *_partner columns (actor–partner models).",
             _ => "Long · One row per ID + " + group + ". Each variable has its own column."
         };
     }
-    private static string ShapeName(Layout shape) => shape switch { Layout.Person => "Wide", Layout.PersonTime => "Long", Layout.Measurement => "Custom", _ => "Source rows" };
+    private static string ShapeName(Layout shape) => shape switch { Layout.Person => "Wide", Layout.PersonTime => "Long", Layout.Measurement => "Custom", Layout.Dyad => "Dyads", _ => "Source rows" };
+    /// <summary>Chooses the two roles (additional-key values) that the Dyad layout pairs.</summary>
+    private async void DyadRoles_Click(object sender, RoutedEventArgs e)
+    {
+        if (busy || session.Sources.Count == 0 || !await CommitPendingEdit()) return;
+        var roles = Engine.Roles(session);
+        if (roles.Count < 2) { MessageBox.Show(this, "Dyads need an additional key (for example person or role) with at least two values. Choose it in ID / grouping.", "Dyad roles"); return; }
+        var d = new FormDialog(this, "Dyad roles", "Each row is one role of a pair, with the other role's values added as *_partner columns. Rows of other roles are left out of this layout.");
+        int first = Math.Max(0, roles.IndexOf(session.DyadRoles.ElementAtOrDefault(0) ?? "")), second = roles.IndexOf(session.DyadRoles.ElementAtOrDefault(1) ?? ""); if (second < 0 || second == first) second = first == 0 ? 1 : 0;
+        var a = d.Choice("First role", roles.ToArray(), first); var b = d.Choice("Partner role", roles.ToArray(), second);
+        if (d.Finish("Use these roles") != true) return;
+        if (a.SelectedIndex == b.SelectedIndex) { MessageBox.Show(this, "Choose two different roles.", "Dyad roles"); return; }
+        var chosen = new List<string> { roles[a.SelectedIndex], roles[b.SelectedIndex] };
+        Change(() => session.DyadRoles = chosen, $"Dyads pair {chosen[0]} with {chosen[1]}");
+    }
     private async void RowVariables_Click(object sender, RoutedEventArgs e)
     {
         if (busy || session.Sources.Count == 0 || !await CommitPendingEdit()) return;

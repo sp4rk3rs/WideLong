@@ -1,18 +1,18 @@
 <p align="center">
-  <img src="Codex/output/branding/WideLongLogo.png" alt="WideLong logo" width="180">
+  <img src="app/WideLong/Assets/WideLongLogo.png" alt="WideLong logo" width="180">
 </p>
 
 # WideLong
 
 Combine CSV files, reshape between wide and long, clean values, and export the dataset with readable R or SAS code that rebuilds it from the original files.
 
-*Windows prototype · version 0.5.3 · by Parker McKasson · [MIT License](LICENSE)*
+*Windows prototype · version 0.6.0 · by Parker McKasson · [MIT License](LICENSE)*
 
 A visual, offline CSV preparation workspace. Select variables by source file, match records by ID with optional additional and time/grouping keys, reshape repeated columns, correct values, and export a smaller dataset for R or SAS.
 
 Everything runs locally: no network calls, telemetry or automatic saving. See [PRIVACY.md](PRIVACY.md).
 
-> **AI assistance.** This project was developed with substantial help from AI coding assistants: Claude Opus 5.5 (Anthropic), Sol 6.1, and Astra 6. They drafted and revised much of the code, tests and documentation at the author's direction. Every release is built and tested, and the generated R code is checked by running it in R against the application's own output. See [Acknowledgments](#acknowledgments).
+> **AI assistance.** This project was developed with substantial help from AI coding assistants: Claude Opus 5.5, Sol 6.1, and Astra 6. They drafted and revised much of the code, tests and documentation at the author's direction. Every release is built and tested, and the generated R code is checked by running it in R against the application's own output. See [Acknowledgments](#acknowledgments).
 
 ## Requirements
 
@@ -22,7 +22,7 @@ Everything runs locally: no network calls, telemetry or automatic saving. See [P
 
 ## Start
 
-Build first (see [Build and verify](#build-and-verify)). Then double-click **Start WideLong.cmd**, or run **output/WideLong-0.5.3/WideLong.exe**. Keep the executable and its neighboring runtime files together. This build uses the **.NET 10 Desktop Runtime**. It does not download a runtime, packages, or application assets during use.
+Build first (see [Build and verify](#build-and-verify)). Then double-click **Start WideLong.cmd**, or run **output/WideLong/WideLong.exe**. Keep the executable and its neighboring runtime files together. This build uses the **.NET 10 Desktop Runtime**. `./Build.ps1 -Publish` also makes `output/WideLong-<version>-win-x64.zip`: a single self-contained `WideLong.exe` that runs without installing .NET, suitable for a GitHub release. It does not download a runtime, packages, or application assets during use.
 
 Open **Examples…** and choose a structure resembling your files. Every example is fictional; no data loads automatically.
 
@@ -37,11 +37,11 @@ Open **Examples…** and choose a structure resembling your files. Every example
 
 ## Workflow
 
-1. **Import CSV**: select one or more files, delimiter, encoding, and missing-value rules. Headers must be unique and nonempty. Supported delimiters are comma, semicolon, tab, and pipe; encodings are strict UTF-8, UTF-16 LE, and Windows-1252. Quoting, embedded commas/newlines, Unicode, and leading zeros are preserved. Blank physical lines are skipped. Imported variables start as Text; WideLong then lists variables that are entirely or almost entirely numbers (at least 80% of non-missing values, up to five non-number codes such as "not given") and asks once whether to treat them as numbers. **Yes** converts them as recorded cleaning steps, turning the listed codes into missing values; **No** keeps everything as text. Values with leading zeros (IDs, ZIP codes) are never offered. Right-click a variable → **Revert variable type** returns it to its original text at any time.
+1. **Import CSV**: select one or more files, delimiter, encoding, missing-value rules and where the file comes from. **Detect automatically** recognizes Qualtrics exports and skips their two description rows (question text and import IDs) under the header; you can also choose Qualtrics, REDCap or a plain CSV explicitly. REDCap's `record_id` and `redcap_event_name` are suggested as ID and time. Files saved from Excel that are not UTF-8 get a suggestion to choose Windows-1252. Headers must be unique and nonempty. Supported delimiters are comma, semicolon, tab, and pipe; encodings are strict UTF-8, UTF-16 LE, and Windows-1252. Quoting, embedded commas/newlines, Unicode, and leading zeros are preserved. Blank physical lines are skipped. Imported variables start as Text; WideLong then lists variables that are entirely or almost entirely numbers (at least 80% of non-missing values, up to five non-number codes such as "not given") and asks once whether to treat them as numbers. **Yes** converts them as recorded cleaning steps, turning the listed codes into missing values; **No** keeps everything as text. Values with leading zeros (IDs, ZIP codes) are never offered. Right-click a variable → **Revert variable type** returns it to its original text at any time.
 2. **ID / grouping** on a file: review its ID, optional **Additional matching column**, and optional time/grouping column. The additional column can distinguish people or roles sharing an ID; time/grouping distinguishes their repeated records. Recommendations run locally using column names, completeness, uniqueness, and shared ID values across files. **Review matching…** shows missing/duplicate keys and exact cross-file ID coverage before combining files. The full set of configured keys must be unique within each file. Your explicit choices take precedence over later recommendations. Matching is exact and case-sensitive; numeric uniqueness alone does not establish an ID.
 3. Use the **left sidebar** to search variables, expand/collapse source files, and select what remains. Required keys are marked. Click a variable name to find it in the grid. Pause over its name for an action menu, or right-click immediately.
 4. **Match IDs and groups** combines files by ID and exact additional/time values when configured. ID-only values apply to every person and time for that ID; a file with ID + time but no additional key applies its values to each person at that matching time. Person-specific values stay with that person. Keep all IDs, IDs present in every file, or IDs from the first file. **Stack matching columns** aligns variables by name, keeps records from different files separate, and adds source-file provenance.
-5. The layout order is **ID**, **ID + the selected matching column names**, **Custom variables**, **Source rows**. **ID** is wide: one row per ID, with person/time observations in separate columns when those keys are configured. The long layout keeps one row per complete configured key, such as **ID + person + time**. **Custom variables** puts only explicitly chosen variables into `variable` / `value` rows; other variables remain context columns. **Source rows** / **View file** shows a chosen source file. The active layout is dark purple, and a **Viewing: Wide / Long / Custom / Source rows** badge identifies the displayed shape. Switching layouts does not alter source rows.
+5. The layout order is **ID**, **ID + the selected matching column names**, **Custom variables**, **Dyads**, **Source rows**. **Dyads** (with an additional key such as person or role) keeps one row per ID + role + time for two roles chosen under **Dyad roles…**, and adds the partner's role-specific variables as `*_partner` columns, the shape actor–partner models in R or SAS PROC MIXED need. ID-level values are not duplicated. In the wide layout, time columns follow the order in which time values occur within each ID (an ID without Baseline no longer pushes Baseline after Month 3); right-click a time column → **Order time values…** to set the order yourself. **ID** is wide: one row per ID, with person/time observations in separate columns when those keys are configured. The long layout keeps one row per complete configured key, such as **ID + person + time**. **Custom variables** puts only explicitly chosen variables into `variable` / `value` rows; other variables remain context columns. **Source rows** / **View file** shows a chosen source file. The active layout is dark purple, and a **Viewing: Wide / Long / Custom / Source rows** badge identifies the displayed shape. Switching layouts does not alter source rows.
 6. **Click a column header** to add it as the next sorting variable. Its header becomes dark purple, cells are shaded, and a number shows priority. Click again to remove it. Sorted variables move to the far left in priority order. A column's right-click menu shows **Add to sorting** or **Remove from sorting** as appropriate; unavailable actions are greyed and explain why when hovered. The **Sort by** chips show the order; arrows reverse direction and × removes a rule. Drag chips to change priority.
    **Search variables to sort by…** (in the Sort by bar) finds any output variable by name or source file, which is faster than scrolling across hundreds of columns. Arrow keys move through matches; Enter adds the highlighted variable ascending, Shift+Enter descending. Variables already in the sort order are not listed.
 7. **Drag any column header** to move it. Moving a sorted column also sets active sorting priorities from left to right. Moving an unsorted column preserves sorting priority. Each layout retains its own column order, sorting, and output names during the session. Hidden variables retain their preferences. Numbers sort numerically, Text sorts as text, missing values sort last, and ties retain import order.
@@ -86,7 +86,7 @@ Uncheck the empty-cell rule to retain genuine empty Text values. Numeric, Date, 
 
 - **Text** preserves leading-zero identifiers and literal codes.
 - **Number** uses decimal-point notation. Group separators such as `1,234` are not guessed. Keep long identifiers and exact high-precision values as Text for R/SAS floating-point compatibility.
-- **ID, additional-key and time columns** can be converted like any other variable (right-click the combined column header or the key in the sidebar). The combined key column takes that type when every file's key column has the same type, so numeric IDs sort as numbers and export as numeric in R/SAS; if files disagree, it quietly stays Text. Converting offers to change the matching key in every file together. **Key values are never rewritten:** a key type change is refused if any value would change its text (for example `0201` → `201`, `201.0` → `201`, or a leading space), if distinct values would collapse into one, or if a key value matches a missing-value code.
+- **ID, additional-key and time columns** can be converted like any other variable (right-click the combined column header or the key in the sidebar). The combined key column takes that type when every file's key column has the same type, so numeric IDs sort as numbers and export as numeric in R/SAS; if files disagree, it quietly stays Text. Converting offers to change the matching key in every file together. **Explicit key conversions can change their text:** Number removes leading zeros and normalizes numeric text (for example `00001` → `1` or `201.0` → `201`). Review the preview and keep the every-file option checked to convert matching keys together. Conversion is refused if distinct key values within or across the selected files would collapse into one (for example `007` and `7`), if values cannot convert, or if a key value matches a missing-value code. Undo and Revert variable type can restore the original padded text. Automatic number detection still leaves leading-zero IDs as Text.
 - **Date** requires an explicit input format, initially `yyyy-MM-dd`, and stores ISO dates. Examples include `MM/dd/yyyy` and `dd/MM/yyyy`. Datetime/timezone conversion is outside this prototype.
 - **Boolean** accepts true/false, yes/no, and 1/0, ignoring case, and stores true/false.
 
@@ -106,9 +106,19 @@ Unchecking a repeated source column removes its corresponding wide output column
 
 Only selected source cells create custom rows. A selected missing cell is retained; an unmatched record without any selected source cells produces no value row. The shared value column uses a common type when possible and Text for mixed types. Variables remain adjacent by source file, collisions are qualified by source, and wide names use `variable__grouping_value` or `variable__role__grouping_value` when an additional matching key is configured.
 
+## Scale scores and value labels
+
+Right-click a variable → **New scale score…** to score a questionnaire: choose numeric items of one file, mark reverse-coded items (a 1–5 answer x becomes 1 + 5 − x), choose mean or sum, and the minimum number of answered items. The score is added as a new Number variable after the file's columns, recomputed whenever its items change, and written into the R and SAS cleaning code. Missing-value codes of the items (for example 99) are left out. Right-click the score → **Edit scale…** or **Remove scale**.
+
+**Value labels…** attaches labels such as `1 = Strongly disagree` to a Text or Number variable. Values are unchanged. Exports list the labels in the dictionary; `import.R` makes a factor when every value is labelled (otherwise it keeps the values with a `labels` attribute, the convention haven/labelled read); `import.sas` and the SAS cleaning program create formats; the R cleaning script adds the `labels` attribute.
+
+## Recipes
+
+**Recipe ▾ → Save recipe…** writes a `.widelong.json` file with everything needed to rebuild this session from the original files: ID / grouping choices, kept and renamed variables, types, missing-value rules, mappings, response filters, corrections and recodes, scales, value labels, time order, dyad roles, layouts, sorting, column names and filter rules. It contains no data rows; values typed into corrections and recodes and the files' folder paths are included, as in the cleaning code. **Open recipe…** finds each original file (its recorded path, then the recipe's folder, otherwise it asks), checks that its columns match, and reapplies every step. It stops if a recorded single-value correction no longer finds its value, and reports files that have gained or lost rows.
+
 ## Filter responses (keep rules)
 
-Right-click a variable (in the sidebar or a column header) → **Filter responses…** lists every response with its record count, plus *(missing)* when there are missing values. Checked responses stay; records with an unchecked response are removed from that file **before files are combined**, so every layout, export and cleaning script leaves them out. For example, uncheck *Informant* under person to drop informant records in every shape (wide exports no longer get `__Informant` columns). A filter on a matching key (ID, person, time) applies to that column in every file. The sidebar marks filtered variables with “· filtered”, and the menu reads **Filter responses… (active)**. Choose **Select all** and Apply to remove the filter. Repeated columns (one per time) use Filter rules instead, because one response would remove a whole record. Changing or reverting a variable's type keeps the same records.
+Right-click a variable (in the sidebar or a column header) → **Filter responses…** lists every response with its record count, plus *(missing)* when there are missing values. Checked responses stay; records with an unchecked response are removed from that file **before files are combined**, so every layout, export and cleaning script leaves them out. For example, uncheck *Informant* under person to drop informant records in every shape (wide exports no longer get `__Informant` columns). A filter on a matching key (ID, person, time) applies to that column in every file, including files imported later. The sidebar marks filtered variables with “· filtered”, and the menu reads **Filter responses… (active)**. Choose **Select all** and Apply to remove the filter. Repeated columns (one per time) use Filter rules instead, because one response would remove a whole record. Changing or reverting a variable's type, or **Replace values** on a filtered response, keeps the same records.
 
 ## Search and typed filter rules
 
@@ -141,12 +151,12 @@ Name the dataset first. The ZIP and every file inside it use that name (the Save
 - SAS numeric, Date, and Boolean missing values use `.`; character missing uses blank. SAS cannot preserve a distinction between genuine empty Text and character missing.
 - Other-software CSV uses blank missing values. CSV alone carries no type metadata and may not preserve the distinction between missing and empty text.
 
-After these options, **Review your export** shows the actual prepared output before opening a destination picker. Each shape has its own tab with row/column counts, missing-cell counts, the software's missing-value code, included filenames, and the first eight rows using actual exported column names and codes. An expandable name list shows display names changed for SAS-compatible bundle headers. Review all tabs for Both; Cancel returns without writing anything. **Choose destination…** opens the native Save dialog, and only confirming that dialog proceeds to write the selected export.
+After these options, **Review your export** shows the actual prepared output before opening a destination picker. Each shape has its own tab with row/column counts, missing-cell counts, the software's missing-value code, included filenames, and the first eight rows using actual exported column names and codes. An expandable name list shows display names changed for SAS-compatible bundle headers. **Variable summary** lists each column's N, missing count and share, distinct values, minimum, maximum and mean, and flags columns to check (all or over half missing, one value only, numbers more than 3 interquartile ranges from the middle half). Review all tabs for Both; Cancel returns without writing anything. **Choose destination…** opens the native Save dialog, and only confirming that dialog proceeds to write the selected export.
 
 A single-layout ZIP named `NAME.zip` contains (for R; SAS uses `.sas`):
 
-- `NAME.csv`: the dataset, with unique SAS-compatible headers of at most 32 ASCII characters.
-- `NAME dictionary.csv`: exported name, display name, chosen type, and source.
+- `NAME.csv`: the dataset. SAS and Other-software exports use unique SAS-compatible headers of at most 32 ASCII characters; R exports keep the names shown in WideLong (the same names `clean.R` produces).
+- `NAME dictionary.csv`: exported name, display name, chosen type, source, and value labels when any.
 - `NAME import.R` / `NAME import.sas`: reads `NAME.csv` with explicit missing-value and type handling.
 - `NAME clean.R` / `NAME clean.sas` (when **Include the cleaning code** is checked): rebuilds the dataset from your original files; see below.
 - `NAME README.txt`: what each file is and the missing-value conventions.
@@ -162,15 +172,15 @@ The cleaning code reads your **original files** and rebuilds the prepared datase
 Both languages follow the same outline:
 
 1. **Read the original files**, every column as text (codes and leading zeros survive), with a check of each file's row count (R).
-2. **Clean each file**: renamed columns; single-value corrections (`dem[12, "age"] <- 34  # was "340"`); recodes; type changes grouped together ("Store as numbers; "-99" counts as missing"); missing-value codes; **Filter responses** (`dem <- dem[dem$person %in% c("P", "S"), ]  # leaves out "I"`); and the selected variables.
+2. **Clean each file**: renamed columns; type changes of matching keys, rewritten to the same text WideLong matches on (`00001` → `1`, `3/5/2025` → `2025-03-05`); single-value corrections (`dem[12, "age"] <- 34  # was "340"`); recodes; type changes grouped together ("Store as numbers; "-99" counts as missing"); missing-value codes; scale scores; **Filter responses** (`dem <- dem[dem$person %in% c("P", "S"), ]  # leaves out "I"`); and the selected variables.
 3. **Combine the files**: repeated columns become rows where needed, then one row per ID (+ person) (+ time) in the order IDs first appear, and each file's variables are matched on the keys it has. Stacked files keep a `source_file` column.
 4. **Final columns, filters and sorting**: matching keys get their final type, then column order, names chosen in WideLong, filter rules, Search rows and sorting.
 
-R uses base R only and ends with a data frame named `prepared` (a commented `write.csv()` line saves it). SAS ends with `WORK.NAME`; set the `folder` macro variable at the top, and a commented LIBNAME block saves a permanent copy. Small helpers (`read_text`, `stack_columns`, `spread`) are defined once with a comment when the layout needs them. Corrections and recodes refer to data rows in the original file order. The program never writes output automatically.
+**Cleaning code…** opens on R, the language whose generated code is verified by running it. R uses base R only and ends with a data frame named `prepared` (a commented `write.csv()` line saves it). SAS ends with `WORK.NAME`; set the `folder` macro variable at the top, and a commented LIBNAME block saves a permanent copy. Small helpers (`read_text`, `stack_columns`, `spread`) are defined once with a comment when the layout needs them. Corrections and recodes refer to data rows in the original file order. The program never writes output automatically.
 
 For built-in examples, **Save example files + code ZIP…** writes unchanged fictional source CSVs, `clean.R`, `clean.sas` when supported, and instructions. Imported originals are never included by this action.
 
-Scripts contain local paths and explicitly corrected/recoded values; review them before sharing. Full unchanged datasets are not embedded. The application does not execute generated R or SAS. SAS code currently rejects multiline/control-character text, leading/trailing whitespace distinctions, oversized characters/labels, and unsupported date formats. Unsupported numeric precision/exponent replay is blocked; retain such values as Text or export prepared data. R programs are tested by running them in R on fictional sources and requiring exactly the application's output; SAS programs are generated by the same plan but have not been run in SAS. Release-specific R and SAS validation results and limitations are recorded in [CHANGELOG.md](CHANGELOG.md).
+Scripts contain local paths and explicitly corrected/recoded values; review them before sharing. Full unchanged datasets are not embedded. The application does not execute generated R or SAS. SAS code currently rejects multiline/control-character text (including in skipped Qualtrics description rows), leading/trailing whitespace distinctions, oversized characters/labels, and unsupported date formats. Folder or file names containing `&`, `%`, `;`, quotes or parentheses are written as full quoted paths instead of the `folder` macro variable. Two-digit-year date patterns (`yy`) are refused everywhere, because WideLong, R and SAS assign centuries differently. Unsupported numeric precision/exponent replay is blocked; retain such values as Text or export prepared data. R programs are tested by running them in R on fictional sources and requiring exactly the application's output; SAS programs are generated by the same plan but have not been run in SAS. Release-specific R and SAS validation results and limitations are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 ## Privacy and scope
 
@@ -180,7 +190,7 @@ The implementation has no model integration, network client, server, telemetry, 
 
 Windows controls paging, crash dumps, file-dialog metadata, clipboard behavior, and folder synchronization. Exporting into a cloud-synced folder follows that folder's existing sync settings. Managed memory is not cryptographically zeroed. This prototype has no independent security audit or compliance certification.
 
-There is no arbitrary row/column cap, but available RAM limits operations. The grid virtualizes visible cells; original and working sources, previews, undo snapshots, and prepared exports still use memory. Oversized operations stop rather than spilling data to disk. Matching supports ID, one optional additional matching column, and one optional time/grouping column. Arbitrary additional key columns, many-to-many joins, automatic aggregation, nested repeated structures, native SAS/R binary inputs, statistical analysis, and reloadable sessions are outside current scope. Ambiguous keys and lossy pivots are rejected.
+There is no arbitrary row/column cap, but available RAM limits operations. The grid virtualizes visible cells; original and working sources, previews, undo snapshots, and prepared exports still use memory. Oversized operations stop rather than spilling data to disk. Matching supports ID, one optional additional matching column, and one optional time/grouping column. Arbitrary additional key columns, many-to-many joins, automatic aggregation, nested repeated structures, native SAS/R binary inputs and statistical analysis are outside current scope. Recipes save settings, not data, so a reopened session always reads the original files again. Ambiguous keys and lossy pivots are rejected.
 
 ## Build and verify
 
@@ -190,18 +200,22 @@ Install a .NET 10 SDK with Windows Desktop targeting support, then run in PowerS
 ./Build.ps1 -Test
 # Also execute generated cleaning programs in an installed R:
 ./Build.ps1 -Test -Rscript 'C:/Program Files/R/R-4.5.2/bin/Rscript.exe'
+# Also make a self-contained single-file release ZIP (downloads the .NET runtime packs from nuget.org):
+./Build.ps1 -Publish
 ```
+
+The version is set once, in `Directory.Build.props`; the window title, generated scripts and export READMEs read it from the built assembly. GitHub Actions (`.github/workflows/checks.yml`) builds and runs the whole suite, including native R replays, on every push and pull request.
 
 To pressure-test with your own CSV files, keep them in a folder outside this repository and add `-StressData <folder>` (optionally `-StressOutput <folder>`; the default is `stress-output` inside the data folder). The run imports every CSV with common numeric missing codes, maps numbered repeated columns, converts numeric variables, IDs and times, and checks every combined cell against its source record across long, wide, custom-row, stacked, sorted, filtered and random file-combination layouts, plus export bundles, R/SAS code and native R replays of a file subset. Only `stress-report.txt` and the replay folders are written to the output folder; nothing is copied into this repository. Native R replays use the first six files, or the files whose names start with the comma-separated prefixes in `WIDELONG_STRESS_SUBSET`.
 
-No NuGet packages are required; `NuGet.Config` clears external package sources. Builds go to `output/WideLong-0.5.3`; caches and explicit fictional test exports stay in `work`. Application source is in `app/WideLong`; `tests` links the same transformation/export/presentation/recipe code. Verification counts and runtime execution results belong in the changelog for the specific release.
+No NuGet packages are required; `NuGet.Config` clears external package sources (only `-Publish` downloads runtime packs). Builds go to `output/WideLong`; caches and explicit fictional test exports stay in `work`. Application source is in `app/WideLong`; `tests` links the same transformation/export/presentation/recipe code. Verification counts and runtime execution results belong in the changelog for the specific release.
 
 Launch a fictional-only verification window with imports disabled:
 
 ```powershell
-./output/WideLong-0.5.3/WideLong.exe --synthetic-check
+./output/WideLong/WideLong.exe --synthetic-check
 # Start the same fictional-only check with the household ID/person/time example:
-./output/WideLong-0.5.3/WideLong.exe --synthetic-check --compound-example
+./output/WideLong/WideLong.exe --synthetic-check --compound-example
 ```
 
 Local SAS 9.4 startup was attempted in an isolated batch smoke check, but it exited 115 before producing the requested log or test output. The cause was not established, so generated SAS has not been runtime-validated. The diagnostic notes are in [docs/sas-validation.md](docs/sas-validation.md); current release results are recorded in the changelog.
@@ -216,7 +230,9 @@ Local SAS 9.4 startup was attempted in an isolated batch smoke check, but it exi
 | `tests` | Console test suite (links the application's data, export and code-generation sources) |
 | `scripts` | `run-checks` helper that builds, runs every check and writes a log |
 | `docs` | SAS validation notes |
-| `Build.ps1` | Build and test entry point |
+| `Build.ps1` | Build, test and publish entry point |
+| `Directory.Build.props` | The release version |
+| `.github/workflows` | Continuous integration (build and tests with R) |
 | `output/`, `work/` | Created by builds and tests; ignored by Git |
 
 Datasets (`*.csv`, `*.tsv`, `*.xlsx`, SAS/R data files) are ignored by `.gitignore` so real data is not committed by accident. The built-in examples are generated in code, so no data files are needed.

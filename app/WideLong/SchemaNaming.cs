@@ -32,7 +32,7 @@ public static class KeyRecommendations
                 var candidates = source.Fields.Select((f, c) =>
                 {
                     string name = Normal(f.Name);
-                    int score = name is "id" or "id_number" or "idnumber" || name.EndsWith("_id") ? 100 : name.EndsWith("_code") || name is "department" or "account" or "device" or "product" ? 55 : 0;
+                    int score = name is "id" or "id_number" or "idnumber" or "responseid" || name.EndsWith("_id") ? 100 : name.EndsWith("_code") || name is "department" or "account" or "device" or "product" ? 55 : 0;
                     if (name is "row_number" or "row_id" or "index" or "record_number") score = 0;
                     var values = source.Rows.Select(r => r[c]).ToHashSet(StringComparer.Ordinal);
                     if (values.Any(v => source.IsMissing(v, c) || string.IsNullOrWhiteSpace(v))) score = 0;
@@ -68,7 +68,7 @@ public static class KeyRecommendations
                 var candidate = source.Fields.Select((f, c) =>
                 {
                     string name = Normal(f.Name);
-                    int score = Regex.IsMatch(name, "(^|_)(time|visit|month|term|wave|period|trial|occasion|timepoint|order_number)($|_)") ? 100 : name.Contains("date") || name.Contains("timestamp") ? 65 : name is "location" or "site" or "scenario" ? 50 : 0;
+                    int score = Regex.IsMatch(name, "(^|_)(time|visit|month|term|wave|period|trial|occasion|timepoint|order_number|event_name)($|_)") ? 100 : name.Contains("date") || name.Contains("timestamp") ? 65 : name is "location" or "site" or "scenario" ? 50 : 0;
                     if (score == 0 && repeated && source.Rows.Count > 1 && source.Rows.All(r => DateTime.TryParseExact(r[c], "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _))) score = 45;
                     if (c == source.IdColumn || c==source.EntityColumn || name.Contains("birth") || name == "dob" || (!repeated && score < 100)) score = 0;
                     if (source.Rows.Any(r => source.IsMissing(r[c], c) || string.IsNullOrWhiteSpace(r[c]))) score = 0;

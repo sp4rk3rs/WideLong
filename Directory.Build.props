@@ -1,0 +1,7 @@
+<Project>
+  <!-- The single place to set the WideLong version. The app, generated scripts, export READMEs and the build output read it from here. -->
+  <PropertyGroup>
+    <Version>0.6.0</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+</Project>

@@ -5,6 +5,12 @@
     <SolidColorBrush x:Key="Accent" Color="#50179A"/>
     <SolidColorBrush x:Key="Secondary" Color="#ADA1BD"/>
     <SolidColorBrush x:Key="SortedCell" Color="#E4D7F4"/>
+    <DataTemplate x:Key="VariableHeaderTemplate">
+      <StackPanel>
+        <TextBlock Text="{Binding Title}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+        <TextBlock Text="{Binding Subtitle}" FontSize="10" Opacity="0.78" FontWeight="Normal" Margin="0,4,0,0" TextWrapping="NoWrap"/>
+      </StackPanel>
+    </DataTemplate>
     <Style TargetType="Window"><Setter Property="FontFamily" Value="Segoe UI"/><Setter Property="FontSize" Value="13"/><Setter Property="Foreground" Value="{StaticResource Ink}"/><Setter Property="Background" Value="#F7F5FA"/></Style>
     <Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style>
     <Style TargetType="Button">

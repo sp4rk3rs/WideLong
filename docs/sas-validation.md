@@ -4,7 +4,7 @@ Result: **blocked during SAS startup; generated-program correctness has not been
 
 The installed executable was found at `C:/Program Files/SASHome/SASFoundation/9.4/sas.exe`, file version `9413.00.25544.34773`. The presence of an executable does not establish that it can initialize successfully.
 
-The final smoke harness explicitly selects the installed `nls/en/sasv9.cfg`. Its input program, intentionally empty autoexec, requested log/listing, WORK directory, SASUSER directory, and stdout/stderr captures are all under this `Codex/work/sas-validation` directory. It uses `-noterminal -nodms -nosplash -rsasuser` and launches hidden. No personal autoexec, user SAS session, participant dataset, or remote SAS service was opened.
+The final smoke harness explicitly selects the installed `nls/en/sasv9.cfg`. Its input program, intentionally empty autoexec, requested log/listing, WORK directory, SASUSER directory, and stdout/stderr captures were retained in a separate local diagnostics directory; the harness and its generated artifacts are not shipped in this source repository. It uses `-noterminal -nodms -nosplash -rsasuser` and launches hidden. No personal autoexec, user SAS session, participant dataset, or remote SAS service was opened.
 
 | Attempt | Owned process ID | Startup result |
 |---|---:|---|
@@ -17,4 +17,4 @@ The installed root `sasv9.cfg` points to the installed English configuration. Bo
 
 No diagnostic message established a cause. In particular, these results do **not** establish an expired license, a missing product, a code-generation defect, or successful SAS execution. No generated fixture programs or fixture PROC COMPARE checks were run after smoke initialization failed.
 
-To retry after the local SAS startup issue is resolved, run `./run-smoke.ps1` from PowerShell. The harness returns SAS's exit status. Success requires `DH_SMOKE_COMPARE_SYSINFO=0` and `DH_SMOKE_COMPLETE` in `smoke.log`; an exit status alone is insufficient. Keep any future fixtures and outputs inside this directory, and use only the project's fictional test fixtures.
+To retry after the local SAS startup issue is resolved, use the separately retained local diagnostics harness and run `./run-smoke.ps1` from its own directory in PowerShell. That harness is not included in this source repository. It returns SAS's exit status. Success requires `DH_SMOKE_COMPARE_SYSINFO=0` and `DH_SMOKE_COMPLETE` in `smoke.log`; an exit status alone is insufficient. Keep any future fixtures and outputs in a separate diagnostics directory, and use only the project's fictional test fixtures.

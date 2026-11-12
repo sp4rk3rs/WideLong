@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 namespace WideLong;
 
 public enum ValueKind { Text, Number, Date, Boolean }
-public enum Layout { PersonTime, Person, Measurement, Source }
+public enum Layout { PersonTime, Person, Measurement, Source, Dyad }
 public enum MatchMode { AllPeople, CommonPeople, FirstFilePeople }
 public enum StepKind { Cell, Replace, Convert }
 /// <param name="RestoreMissing">A Convert step that also set the variable's missing codes; PriorFieldMissing is what a revert restores.</param>
@@ -23,7 +23,9 @@ public sealed class Field
     public string Measure { get; set; } = "";
     public string Occasion { get; set; } = "";
     public HashSet<string>? MissingTokens { get; set; }
-    public Field Copy() { var copy = (Field)MemberwiseClone(); copy.MissingTokens = MissingTokens == null ? null : new(MissingTokens, StringComparer.Ordinal); return copy; }
+    /// <summary>Value labels such as 1 = "Strongly disagree". They do not change the values; exports add them as R factors/labels and SAS formats.</summary>
+    public Dictionary<string, string>? ValueLabels { get; set; }
+    public Field Copy() { var copy = (Field)MemberwiseClone(); copy.MissingTokens = MissingTokens == null ? null : new(MissingTokens, StringComparer.Ordinal); copy.ValueLabels = ValueLabels == null ? null : new(ValueLabels, StringComparer.Ordinal); return copy; }
 }
 
 public sealed class Source
@@ -36,7 +38,16 @@ public sealed class Source
     public List<string[]>? OriginalRows { get; set; }
     public List<CleaningStep> Steps { get; set; } = [];
     public List<KeepRule> KeepRules { get; set; } = [];
+    /// <summary>Scale scores, stored as derived columns after the file's own columns (see Scales).</summary>
+    public List<ScaleScore> Scales { get; set; } = [];
+    /// <summary>Columns that exist in the original file; scale scores follow them.</summary>
+    public int FileColumns => Fields.Count - Scales.Count;
+    public bool IsDerived(int column) => column >= FileColumns;
     public char Delimiter { get; set; } = ',';
+    /// <summary>Records under the header that are not data (Qualtrics writes question text and import IDs there). Skipped on import and in the cleaning code.</summary>
+    public int SkipRows { get; set; }
+    /// <summary>The skipped records, kept only so code generators can check them (SAS cannot read multiline values).</summary>
+    public List<string[]> SkippedRows { get; set; } = [];
     public string EncodingName { get; set; } = "UTF-8";
     public HashSet<string> MissingTokens { get; set; } = new(StringComparer.Ordinal) { "" };
     public bool IdChosen { get; set; }
@@ -52,18 +63,23 @@ public sealed class Source
     public IReadOnlySet<string> EffectiveMissingTokens(int column) => Fields[column].MissingTokens ?? MissingTokens;
     public bool IsMissing(string value, int column) => EffectiveMissingTokens(column).Contains(value) || (Fields[column].Kind != ValueKind.Text && value.Length == 0);
     public bool IsKeyColumn(int column) => column == IdColumn || column == EntityColumn || column == TimeColumn;
-    public void CaptureOriginal() => OriginalRows ??= Rows.Select(r => (string[])r.Clone()).ToList();
+    public void CaptureOriginal() => OriginalRows ??= Rows.Select(r => r[..FileColumns]).ToList();
     /// <summary>True when a data record passes every response filter ("keep rule") of this file.</summary>
     public bool Keeps(int row) { foreach (var rule in KeepRules) { string v = Rows[row][rule.Column]; if (IsMissing(v, rule.Column) ? !rule.KeepMissing : Array.IndexOf(rule.Values, v) < 0) return false; } return true; }
     /// <param name="includeOriginals">False for preview snapshots, which never read the original rows.</param>
-    public Source Copy(bool includeOriginals = true) => new() { Key = Key, Name = Name, ImportPath = ImportPath, Fields = Fields.Select(f => f.Copy()).ToList(), Rows = Rows.Select(r => (string[])r.Clone()).ToList(), OriginalRows = includeOriginals ? OriginalRows?.Select(r => (string[])r.Clone()).ToList() : null, Steps = Steps.Select(s => s with { MissingTokens = s.MissingTokens?.ToArray() }).ToList(), KeepRules = [.. KeepRules], Delimiter = Delimiter, EncodingName = EncodingName, MissingTokens = new(MissingTokens, StringComparer.Ordinal), IdChosen = IdChosen, GroupChosen = GroupChosen, EntityChosen = EntityChosen, GroupReason = GroupReason, EntityReason = EntityReason, IdColumn = IdColumn, TimeColumn = TimeColumn, EntityColumn = EntityColumn, IdReason = IdReason };
+    /// <remarks>Original rows are captured once and never modified, so copies (undo snapshots, code plans) share them instead of duplicating every value.</remarks>
+    public Source Copy(bool includeOriginals = true) => new() { Key = Key, Name = Name, ImportPath = ImportPath, Fields = Fields.Select(f => f.Copy()).ToList(), Rows = Rows.Select(r => (string[])r.Clone()).ToList(), OriginalRows = includeOriginals ? OriginalRows : null, Steps = Steps.Select(s => s with { MissingTokens = s.MissingTokens?.ToArray() }).ToList(), KeepRules = [.. KeepRules], Scales = Scales.Select(x => x.Copy()).ToList(), Delimiter = Delimiter, SkipRows = SkipRows, SkippedRows = SkippedRows, EncodingName = EncodingName, MissingTokens = new(MissingTokens, StringComparer.Ordinal), IdChosen = IdChosen, GroupChosen = GroupChosen, EntityChosen = EntityChosen, GroupReason = GroupReason, EntityReason = EntityReason, IdColumn = IdColumn, TimeColumn = TimeColumn, EntityColumn = EntityColumn, IdReason = IdReason };
 }
 
 public sealed class Session
 {
     public List<Source> Sources { get; set; } = [];
     public bool HasEntity => Sources.Any(source => source.EntityColumn >= 0);
-    public Session Copy(bool includeOriginals = true) => new() { Sources = Sources.Select(s => s.Copy(includeOriginals)).ToList() };
+    /// <summary>Time/grouping values in the order chosen by the user (Order time values…). Values not listed follow in data order.</summary>
+    public List<string> TimeOrder { get; set; } = [];
+    /// <summary>The two additional-key values (roles) paired by the Dyad layout, for example Patient and Spouse.</summary>
+    public List<string> DyadRoles { get; set; } = [];
+    public Session Copy(bool includeOriginals = true) => new() { Sources = Sources.Select(s => s.Copy(includeOriginals)).ToList(), TimeOrder = [.. TimeOrder], DyadRoles = [.. DyadRoles] };
 }
 
 public sealed record Origin(string SourceKey, int Row, int Column);
@@ -73,7 +89,11 @@ public sealed record Cell(string Value, Origin? Origin = null, bool? MissingFlag
     public static readonly Cell Empty = new("");
     public bool Missing => MissingFlag ?? Value.Length == 0;
 }
-public sealed record OutputField(string Name, ValueKind Kind, string Source, string Key = "");
+public sealed record OutputField(string Name, ValueKind Kind, string Source, string Key = "")
+{
+    /// <summary>Value labels of the source variable (1 = "Strongly disagree"), when it has any.</summary>
+    public IReadOnlyDictionary<string, string>? Labels { get; init; }
+}
 public sealed class View
 {
     public List<OutputField> Fields { get; set; } = [];
@@ -133,13 +153,16 @@ public static class Csv
         return result;
     }
 
-    public static Source Import(string text, string name, char delimiter = ',')
+    /// <param name="skipRows">Records under the header to leave out (2 for a Qualtrics export); null detects Qualtrics exports automatically.</param>
+    public static Source Import(string text, string name, char delimiter = ',', int? skipRows = 0)
     {
         var records = Parse(text, delimiter);
         if (records[0].Any(string.IsNullOrWhiteSpace)) throw new InvalidOperationException("Every column needs a nonempty header.");
         if (records[0].Distinct(StringComparer.OrdinalIgnoreCase).Count() != records[0].Length)
             throw new InvalidOperationException("The CSV has duplicate column names. Give each column a distinct header before importing.");
-        var source = new Source { Name = name, Fields = records[0].Select(h => new Field { Original = h, Name = h }).ToList(), Rows = records.Skip(1).ToList() };
+        int skip = skipRows ?? (ImportPresets.LooksLikeQualtrics(records) ? 2 : 0);
+        if (skip < 0 || skip > records.Count - 1) throw new InvalidOperationException($"The file has fewer than {skip} records under its header to skip.");
+        var source = new Source { Name = name, Fields = records[0].Select(h => new Field { Original = h, Name = h }).ToList(), Rows = records.Skip(1 + skip).ToList(), SkipRows = skip, SkippedRows = records.Skip(1).Take(skip).ToList() };
         source.Delimiter = delimiter; source.CaptureOriginal(); Inference.Suggest(source);
         return source;
     }
@@ -152,6 +175,16 @@ public static class Csv
     }
 }
 
+/// <summary>Recognizes exports from common survey/data-capture systems. Detection is local and reads only the header area.</summary>
+public static class ImportPresets
+{
+    /// <summary>Qualtrics CSV exports have two extra header records: question text, then {"ImportId":...} JSON for every column.</summary>
+    public static bool LooksLikeQualtrics(List<string[]> records) =>
+        records.Count >= 3 && records[2].Count(v => v.StartsWith("{\"ImportId\"", StringComparison.Ordinal)) * 2 >= records[2].Length;
+    /// <summary>REDCap exports start with record_id and use redcap_event_name for longitudinal events.</summary>
+    public static bool LooksLikeRedcap(Source source) => source.Fields.Any(f => f.Original.Equals("redcap_event_name", StringComparison.OrdinalIgnoreCase) || f.Original.Equals("redcap_repeat_instrument", StringComparison.OrdinalIgnoreCase));
+}
+
 public static class Inference
 {
     public static void Suggest(Source source)
@@ -160,10 +193,10 @@ public static class Inference
         for (int c = 0; c < source.Fields.Count; c++)
         {
             string n = source.Fields[c].Original.ToLowerInvariant().Replace(" ", "_");
-            int score = n is "subject_id" or "participant_id" or "patient_id" or "person_id" ? 100 : n is "id" or "id_number" or "idnumber" ? 90 : Regex.IsMatch(n, "(^|_)(subject|participant|patient|person)($|_)") ? 70 : n.EndsWith("_id") ? 40 : 0;
+            int score = n is "subject_id" or "participant_id" or "patient_id" or "person_id" or "record_id" ? 100 : n is "id" or "id_number" or "idnumber" or "responseid" or "response_id" ? 90 : Regex.IsMatch(n, "(^|_)(subject|participant|patient|person)($|_)") ? 70 : n.EndsWith("_id") ? 40 : 0;
             if (source.Rows.Any(r => string.IsNullOrWhiteSpace(r[c]))) score = 0;
             if (score > bestScore) { source.IdColumn = c; bestScore = score; }
-            if (source.TimeColumn < 0 && n is "time" or "visit" or "visit_date" or "timepoint" or "occasion" or "wave" or "month") source.TimeColumn = c;
+            if (source.TimeColumn < 0 && n is "time" or "visit" or "visit_date" or "timepoint" or "occasion" or "wave" or "month" or "redcap_event_name") source.TimeColumn = c;
         }
         if (source.IdColumn >= 0)
         {
@@ -203,6 +236,7 @@ public static class Values
     {
         if (value.Length == 0 || kind == ValueKind.Text) return value;
         if (kind == ValueKind.Number && decimal.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out decimal n)) return n.ToString("G29", CultureInfo.InvariantCulture);
+        if (kind == ValueKind.Date && DateFormatProblem(dateFormat) is { } problem) throw new InvalidOperationException(problem);
         if (kind == ValueKind.Date && DateTime.TryParseExact(value, dateFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime d)) return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (kind == ValueKind.Boolean)
         {
@@ -212,14 +246,44 @@ public static class Values
         throw new InvalidOperationException($"Cannot convert this value to {kind}.");
     }
 
+    /// <summary>Two-digit years are read with different century cutoffs by .NET, R and SAS (05/12/55 is 1955 in one and 2055 in another), so they are refused.</summary>
+    public static string? DateFormatProblem(string format)
+    {
+        string withoutFullYear = format.Replace("yyyy", "", StringComparison.Ordinal);
+        if (withoutFullYear.Contains('y')) return "Two-digit years are ambiguous: WideLong, R and SAS assign different centuries (05/12/55 can become 1955 or 2055). Use a four-digit year pattern such as MM/dd/yyyy, or fix the years first with Replace values.";
+        if (!format.Contains("yyyy", StringComparison.Ordinal)) return "The date pattern needs a four-digit year (yyyy).";
+        return null;
+    }
+
     public static List<(int Row, string Value)> Failures(Source s, int column, ValueKind kind, string dateFormat)
     {
         var errors = new List<(int, string)>();
         for (int r = 0; r < s.Rows.Count; r++)
-            try { ConvertWithMissing(s.Rows[r][column], kind, dateFormat, s.EffectiveMissingTokens(column)); } catch (InvalidOperationException) { errors.Add((r + 2, s.Rows[r][column])); }
+            try { ConvertWithMissing(s.Rows[r][column], kind, dateFormat, s.EffectiveMissingTokens(column)); } catch (InvalidOperationException) { errors.Add((r + 1, s.Rows[r][column])); }
         return errors;
     }
     public static string ConvertWithMissing(string value, ValueKind kind, string dateFormat, IEnumerable<string>? tokens) => kind != ValueKind.Text && (tokens ?? [""]).Contains(value, StringComparer.Ordinal) ? "" : Convert(value, kind, dateFormat);
+
+    // Use one map across the selected files: different keys must not acquire the same value.
+    public static int KeyConversionCollisions(IEnumerable<(Source Source, int Column)> targets, ValueKind target, string dateFormat)
+    {
+        if (target == ValueKind.Text) return 0;
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        var collisions = new HashSet<(string Before, string After)>();
+        foreach (var (source, column) in targets)
+            foreach (var row in source.Rows)
+            {
+                string before = row[column], after;
+                try { after = ConvertWithMissing(before, target, dateFormat, source.EffectiveMissingTokens(column)); }
+                catch (InvalidOperationException) { continue; } // Reported separately by conversion validation.
+                if (map.TryGetValue(after, out var previous))
+                {
+                    if (previous != before) collisions.Add((before, after));
+                }
+                else map[after] = before;
+            }
+        return collisions.Count;
+    }
 
     public static ConversionPreview PreviewConversion(Source source, IEnumerable<int> columns, ValueKind target, string dateFormat)
     {
@@ -239,12 +303,12 @@ public static class Values
                     if (before != after) changed++;
                     bool losesZero = !wasMissing && !becomesMissing && target == ValueKind.Number && Regex.IsMatch(before.Trim(), @"^[+-]?0\d");
                     if (losesZero) leadingZeros++;
-                    if (examples.Count(x => !x.Invalid) < 6 && seen.Add((c, before, after, becomesMissing))) examples.Add(new(source.Fields[c].Name, r + 2, before, after, becomesMissing, false));
+                    if (examples.Count(x => !x.Invalid) < 6 && seen.Add((c, before, after, becomesMissing))) examples.Add(new(source.Fields[c].Name, r + 1, before, after, becomesMissing, false));
                 }
                 catch (InvalidOperationException)
                 {
                     invalid++;
-                    if (examples.Count(x => x.Invalid) < 4 && seen.Add((c, before, "", false))) examples.Add(new(source.Fields[c].Name, r + 2, before, "Cannot convert", false, true));
+                    if (examples.Count(x => x.Invalid) < 4 && seen.Add((c, before, "", false))) examples.Add(new(source.Fields[c].Name, r + 1, before, "Cannot convert", false, true));
                 }
             }
         return new(total, changed, missing, newlyMissing, leadingZeros, invalid, examples);
@@ -259,6 +323,44 @@ public static class Values
             foreach (var failure in Failures(source, c, source.Fields[c].Kind, "yyyy-MM-dd")) invalid.Add((c, failure.Row, failure.Value));
         }
         return invalid;
+    }
+}
+
+/// <summary>Keeps response filters ("keep rules") consistent with value edits and with files added later.</summary>
+public static class ResponseFilters
+{
+    /// <summary>After Replace values: records whose response was kept stay kept under their new value.</summary>
+    public static void FollowReplace(Source source, int column, string before, string after)
+    {
+        int index = source.KeepRules.FindIndex(r => r.Column == column);
+        if (index < 0) return;
+        var rule = source.KeepRules[index];
+        bool wasKept = source.IsMissing(before, column) ? rule.KeepMissing : rule.Values.Contains(before, StringComparer.Ordinal);
+        if (!wasKept) return;
+        if (source.IsMissing(after, column)) source.KeepRules[index] = rule with { KeepMissing = true };
+        else if (!rule.Values.Contains(after, StringComparer.Ordinal)) source.KeepRules[index] = rule with { Values = [.. rule.Values, after] };
+    }
+
+    /// <summary>A response filter on a matching key (ID, additional key, time) applies to that key in every file, including files imported
+    /// after the filter was made. Newly added files copy the rule from the existing files when those files agree on it.</summary>
+    public static int ExtendKeyFilters(Session session, IEnumerable<Source> added)
+    {
+        var newcomers = added.ToHashSet(); int extended = 0;
+        Func<Source, int>[] roles = [s => s.IdColumn, s => s.EntityColumn, s => s.TimeColumn];
+        foreach (var role in roles)
+        {
+            var existing = session.Sources.Where(s => !newcomers.Contains(s) && role(s) >= 0).Select(s => s.KeepRules.FirstOrDefault(r => r.Column == role(s))).ToList();
+            if (existing.Count == 0 || existing.Any(r => r == null)) continue;
+            var first = existing[0]!;
+            if (existing.Any(r => r!.KeepMissing != first.KeepMissing || !r.Values.Order(StringComparer.Ordinal).SequenceEqual(first.Values.Order(StringComparer.Ordinal), StringComparer.Ordinal))) continue;
+            foreach (var source in newcomers)
+            {
+                int column = role(source);
+                if (column < 0 || source.KeepRules.Any(r => r.Column == column)) continue;
+                source.KeepRules.Add(new(column, [.. first.Values], first.KeepMissing)); extended++;
+            }
+        }
+        return extended;
     }
 }
 
@@ -343,7 +445,7 @@ public sealed record ConversionPreview(int Total, int Changed, int Missing, int 
 
 public static class Engine
 {
-    private sealed record Variable(string Key, string Name, ValueKind Kind, string Source, bool Timed, List<string>? WideTimes = null, bool EntityBound = false, List<string>? EntityValues = null);
+    private sealed record Variable(string Key, string Name, ValueKind Kind, string Source, bool Timed, List<string>? WideTimes = null, bool EntityBound = false, List<string>? EntityValues = null, IReadOnlyDictionary<string, string>? Labels = null);
     private sealed class Record
     {
         public string Id = "";
@@ -359,7 +461,7 @@ public static class Engine
     {
         var view = new View();
         var columns = source.Fields.Select((f, i) => (f, i)).Where(x => x.f.Keep || source.IsKeyColumn(x.i)).ToList();
-        view.Fields = columns.Select(x => new OutputField(x.f.Name, x.f.Kind, source.Name, Key(source, x.i))).ToList();
+        view.Fields = columns.Select(x => new OutputField(x.f.Name, x.f.Kind, source.Name, Key(source, x.i)) { Labels = x.f.ValueLabels }).ToList();
         for (int r = 0; r < source.Rows.Count; r++) if (source.Keeps(r)) view.Rows.Add(columns.Select(x => SourceCell(source, r, x.i)).ToArray());
         return view;
     }
@@ -402,7 +504,7 @@ public static class Engine
                 string key = repeated ? GroupKey(source, f) : Key(source, c);
                 if (perSource.Any(v => v.Key == key && v.Kind != f.Kind)) throw new InvalidOperationException($"Repeated measure {f.Measure} has inconsistent types in {source.Name}.");
                 var existing = perSource.FirstOrDefault(v => v.Key == key);
-                if (existing == null) perSource.Add(new(key, repeated ? f.Measure : f.Name, f.Kind, source.Name, repeated || source.TimeColumn >= 0, repeated ? [f.Occasion] : null, source.EntityColumn >= 0, sourceEntities));
+                if (existing == null) perSource.Add(new(key, repeated ? f.Measure : f.Name, f.Kind, source.Name, repeated || source.TimeColumn >= 0, repeated ? [f.Occasion] : null, source.EntityColumn >= 0, sourceEntities, f.ValueLabels));
                 else if (repeated && !existing.WideTimes!.Contains(f.Occasion, StringComparer.Ordinal)) existing.WideTimes!.Add(f.Occasion);
             }
             variables.AddRange(perSource);
@@ -412,12 +514,12 @@ public static class Engine
             {
                 if (!source.Keeps(r)) continue;
                 string id = source.Rows[r][source.IdColumn];
-                if (source.IsMissing(id, source.IdColumn) || string.IsNullOrWhiteSpace(id)) throw new InvalidOperationException($"{source.Name}, record {r + 2}: ID is missing.");
+                if (source.IsMissing(id, source.IdColumn) || string.IsNullOrWhiteSpace(id)) throw new InvalidOperationException($"{source.Name}, data row {r + 1}: ID is missing.");
                 string entity = source.EntityColumn < 0 ? "" : source.Rows[r][source.EntityColumn];
-                if (source.EntityColumn >= 0 && (source.IsMissing(entity, source.EntityColumn) || string.IsNullOrWhiteSpace(entity))) throw new InvalidOperationException($"{source.Name}, record {r + 2}: additional key '{source.Fields[source.EntityColumn].Name}' is missing. Resolve it before merging.");
+                if (source.EntityColumn >= 0 && (source.IsMissing(entity, source.EntityColumn) || string.IsNullOrWhiteSpace(entity))) throw new InvalidOperationException($"{source.Name}, data row {r + 1}: additional key '{source.Fields[source.EntityColumn].Name}' is missing. Resolve it before merging.");
                 string time = source.TimeColumn < 0 ? "" : source.Rows[r][source.TimeColumn];
-                if (source.TimeColumn >= 0 && (source.IsMissing(time, source.TimeColumn) || string.IsNullOrWhiteSpace(time))) throw new InvalidOperationException($"{source.Name}, record {r + 2}: grouping value is missing. Resolve it before merging.");
-                if (!seen.Add((id, entity, time))) throw new InvalidOperationException($"{source.Name}: duplicate ID/additional-key/time keys (record {r + 2}). Choose the correct key columns or resolve duplicate records. Several people sharing an ID and time need an additional key such as person or role. No rows were multiplied or discarded.");
+                if (source.TimeColumn >= 0 && (source.IsMissing(time, source.TimeColumn) || string.IsNullOrWhiteSpace(time))) throw new InvalidOperationException($"{source.Name}, data row {r + 1}: grouping value is missing. Resolve it before merging.");
+                if (!seen.Add((id, entity, time))) throw new InvalidOperationException($"{source.Name}: duplicate ID/additional-key/time keys (data row {r + 1}). Choose the correct key columns or resolve duplicate records. Several people sharing an ID and time need an additional key such as person or role. No rows were multiplied or discarded.");
                 var basic = new Record { Id = id, Entity = entity, Time = time };
                 var timed = new Dictionary<string, Record>(StringComparer.Ordinal);
                 for (int c = 0; c < source.Fields.Count; c++)
@@ -437,6 +539,7 @@ public static class Engine
             sourceRecords.Add(records);
         }
         var selectedRows = rowVariables?.ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+        if (stack && layout == Layout.Dyad) throw new InvalidOperationException("Dyads pair the records of two roles, so they need Match IDs and groups rather than stacking.");
         if (stack) return Stack(session, sourceRecords, variables, layout, selectedRows);
 
         var idSets = sourceRecords.Select(rs => rs.Select(r => r.Id).ToHashSet(StringComparer.Ordinal)).ToList();
@@ -450,7 +553,7 @@ public static class Engine
             var all = indexes.SelectMany(index => index.TryGetValue(id, out var rs) ? rs : []).ToList();
             merged.AddRange(MergeIdRecords(id, all));
         }
-        var view = Render(merged, variables, layout, selectedRows, SchemaNaming.IdName(session), SchemaNaming.GroupName(session), session.HasEntity ? SchemaNaming.EntityName(session) : null, KeyKinds(session));
+        var view = Render(merged, variables, layout, selectedRows, SchemaNaming.IdName(session), SchemaNaming.GroupName(session), session.HasEntity ? SchemaNaming.EntityName(session) : null, KeyKinds(session), session.TimeOrder, layout == Layout.Dyad && session.HasEntity ? DyadPair(Roles(session), session.DyadRoles) : null);
         int missingPeople = ids.Count(id => idSets.Any(set => !set.Contains(id)));
         int allPeople = idSets.SelectMany(s => s).Distinct(StringComparer.Ordinal).Count();
         view.Notes.Add($"{ids.Count:N0} IDs included · {allPeople - ids.Count:N0} excluded by matching rule · {missingPeople:N0} missing from at least one file");
@@ -490,7 +593,7 @@ public static class Engine
         {
             var existing = unified.FirstOrDefault(u => u.Name == v.Name);
             if (existing != null && existing.Kind != v.Kind) throw new InvalidOperationException($"Cannot stack {v.Name}: types differ across files.");
-            if (existing == null) unified.Add(new("stack:" + v.Name, v.Name, v.Kind, "stacked files", v.Timed, v.WideTimes?.ToList(), v.EntityBound, v.EntityValues?.ToList()));
+            if (existing == null) unified.Add(new("stack:" + v.Name, v.Name, v.Kind, "stacked files", v.Timed, v.WideTimes?.ToList(), v.EntityBound, v.EntityValues?.ToList(), v.Labels));
             else { int index = unified.IndexOf(existing); unified[index] = existing with { Timed = existing.Timed || v.Timed, EntityBound = existing.EntityBound || v.EntityBound, EntityValues = (existing.EntityValues ?? []).Concat(v.EntityValues ?? []).Distinct(StringComparer.Ordinal).ToList(), WideTimes = existing.WideTimes == null || v.WideTimes == null ? null : existing.WideTimes.Concat(v.WideTimes).Distinct(StringComparer.Ordinal).ToList() }; }
         }
         var rows = new List<Record>();
@@ -512,7 +615,7 @@ public static class Engine
             }
         }
         unified.Insert(0, new(sourceKey, "source_file", ValueKind.Text, "provenance", false));
-        var view = Render(rows, unified, layout, selectedRows, SchemaNaming.IdName(session), SchemaNaming.GroupName(session), session.HasEntity ? SchemaNaming.EntityName(session) : null, KeyKinds(session));
+        var view = Render(rows, unified, layout, selectedRows, SchemaNaming.IdName(session), SchemaNaming.GroupName(session), session.HasEntity ? SchemaNaming.EntityName(session) : null, KeyKinds(session), session.TimeOrder);
         view.Notes.Add("Stacked by variable name. Source records remain separate, including overlapping IDs.");
         AddKeyKindWarning(session, view);
         return view;
@@ -548,10 +651,101 @@ public static class Engine
         if (kinds.Count < 2) return null;
         return "ID types differ across files (" + string.Join(", ", valid.Select(s => s.Name + ": " + s.Fields[s.IdColumn].Kind)) + "). The combined ID stays Text. Right-click the ID column header → Change variable type to convert every file together.";
     }
-    // The combined key silently stays Text when files disagree; KeyKindConflict remains available for dialogs and checks.
-    private static void AddKeyKindWarning(Session session, View view) { }
+    /// <summary>When a key was converted in only some files, records can silently stop matching (00001 in one file, 1 in another).
+    /// Mixed types alone stay quiet; this reports only values that would match after converting the remaining files.</summary>
+    public static string? KeyMatchBreak(Session session)
+    {
+        Func<Source, int>[] roles = [s => s.IdColumn, s => s.EntityColumn, s => s.TimeColumn];
+        string[] names = ["ID", "additional key", "time / grouping"];
+        for (int index = 0; index < roles.Length; index++)
+        {
+            var role = roles[index];
+            var keys = session.Sources.Select(s => (Source: s, Column: role(s))).Where(x => x.Column >= 0 && x.Column < x.Source.Fields.Count).ToList();
+            var kinds = keys.Select(k => k.Source.Fields[k.Column].Kind).Distinct().ToList();
+            if (kinds.Count < 2) continue;
+            foreach (var target in kinds.Where(k => k != ValueKind.Text))
+            {
+                var converted = keys.Where(k => k.Source.Fields[k.Column].Kind == target).SelectMany(k => k.Source.Rows.Select(r => r[k.Column])).ToHashSet(StringComparer.Ordinal);
+                foreach (var (source, column) in keys.Where(k => k.Source.Fields[k.Column].Kind != target))
+                {
+                    var format = source.Steps.LastOrDefault(st => st.Kind == StepKind.Convert && st.Column == column && st.Target == target)?.DateFormat ?? "yyyy-MM-dd";
+                    foreach (var row in source.Rows)
+                    {
+                        string value = row[column], canonical;
+                        try { canonical = Values.Convert(value, target, format); } catch (InvalidOperationException) { continue; }
+                        if (canonical != value && converted.Contains(canonical))
+                            return $"The {names[index]} was converted to {target} in some files only: {value} in {source.Name} no longer matches {canonical}. Right-click the {names[index]} column → Change variable type and apply it to every file.";
+                    }
+                }
+            }
+        }
+        return null;
+    }
+    private static void AddKeyKindWarning(Session session, View view) { if (KeyMatchBreak(session) is { } warning) view.Notes.Insert(0, warning); }
 
-    private static View Render(List<Record> records, List<Variable> variables, Layout layout, HashSet<string> selectedRows, string idName, string groupName, string? entityName, KeyKindSet? keyKinds = null)
+    /// <summary>Order of time/grouping values for wide columns. Explicit choices come first; the rest follow the order in which
+    /// values occur within each ID (and in repeated column names), so an ID that lacks Baseline does not push Baseline after Month 3.
+    /// Each pair of values gets a vote per ID that has both; values are ranked by net wins, ties by first appearance.</summary>
+    private static Dictionary<string, int> TimeRanks(List<Record> records, List<Variable> variables, IReadOnlyList<string>? explicitOrder)
+    {
+        var first = new List<string>(); var index = new Dictionary<string, int>(StringComparer.Ordinal);
+        void See(string t) { if (t.Length > 0 && !index.ContainsKey(t)) { index[t] = first.Count; first.Add(t); } }
+        var sequences = new List<List<string>>();
+        foreach (var group in records.GroupBy(r => (r.Id, r.Entity)))
+        {
+            var sequence = group.Select(r => r.Time).Where(t => t.Length > 0).Distinct(StringComparer.Ordinal).ToList();
+            foreach (var t in sequence) See(t);
+            if (sequence.Count > 1) sequences.Add(sequence);
+        }
+        foreach (var v in variables.Where(v => v.WideTimes != null)) { foreach (var t in v.WideTimes!) See(t); if (v.WideTimes!.Count > 1) sequences.Add(v.WideTimes!); }
+        var score = new int[first.Count];
+        if (first.Count <= 400)
+        {
+            var votes = new int[first.Count, first.Count];
+            foreach (var sequence in sequences)
+                for (int a = 0; a < sequence.Count; a++)
+                    for (int b = a + 1; b < sequence.Count; b++) votes[index[sequence[a]], index[sequence[b]]]++;
+            for (int a = 0; a < first.Count; a++)
+                for (int b = 0; b < first.Count; b++) if (a != b) score[a] += Math.Sign(votes[a, b] - votes[b, a]);
+        }
+        var chosen = (explicitOrder ?? []).Where(index.ContainsKey).Distinct(StringComparer.Ordinal).ToList();
+        var ordered = chosen.Concat(first.Where(t => !chosen.Contains(t, StringComparer.Ordinal)).OrderByDescending(t => score[index[t]]).ThenBy(t => index[t])).ToList();
+        return ordered.Select((t, i) => (t, i)).ToDictionary(x => x.t, x => x.i, StringComparer.Ordinal);
+    }
+
+    public const string PartnerSuffix = "\u001fpartner";
+    /// <summary>The two roles a Dyad layout pairs: the chosen ones, or the only two that occur.</summary>
+    public static List<string> DyadPair(IEnumerable<string> entities, IReadOnlyList<string>? chosen)
+    {
+        var present = entities.Where(e => e.Length > 0).Distinct(StringComparer.Ordinal).ToList();
+        if (chosen is { Count: 2 } && chosen[0] != chosen[1]) return [chosen[0], chosen[1]];
+        if (present.Count == 2) return present;
+        throw new InvalidOperationException(present.Count < 2 ? "The Dyad layout needs two roles in the additional key; fewer were found." : $"Choose which two of the {present.Count} roles ({string.Join(", ", present.Take(5))}{(present.Count > 5 ? ", …" : "")}) to pair: Dyad roles… next to the layout buttons.");
+    }
+    /// <summary>The additional-key values (roles) of the combined data, for choosing a dyad.</summary>
+    public static List<string> Roles(Session session)
+    {
+        var roles = new List<string>();
+        foreach (var s in session.Sources.Where(s => s.EntityColumn >= 0 && s.EntityColumn < s.Fields.Count))
+            for (int r = 0; r < s.Rows.Count; r++) { string v = s.Rows[r][s.EntityColumn]; if (s.Keeps(r) && v.Length > 0 && !s.IsMissing(v, s.EntityColumn) && !roles.Contains(v, StringComparer.Ordinal)) roles.Add(v); }
+        return roles;
+    }
+
+    /// <summary>The time/grouping values of the combined data, in the order wide columns use. For the Order time values dialog.</summary>
+    public static List<string> TimeValues(Session session, MatchMode match = MatchMode.AllPeople)
+    {
+        var view = Build(session, Layout.Person, match);
+        var seen = new List<string>();
+        foreach (var key in view.Fields.Select(f => f.Key))
+        {
+            const string marker = "\u001ftime:";
+            int at = key.IndexOf(marker, StringComparison.Ordinal);
+            if (at >= 0 && !seen.Contains(key[(at + marker.Length)..], StringComparer.Ordinal)) seen.Add(key[(at + marker.Length)..]);
+        }
+        return seen;
+    }
+
+    private static View Render(List<Record> records, List<Variable> variables, Layout layout, HashSet<string> selectedRows, string idName, string groupName, string? entityName, KeyKindSet? keyKinds = null, IReadOnlyList<string>? timeOrder = null, IReadOnlyList<string>? dyadRoles = null)
     {
         keyKinds ??= new(ValueKind.Text, ValueKind.Text, ValueKind.Text);
         // Keep variables adjacent by source; qualify only collisions and reserve structural names.
@@ -571,13 +765,38 @@ public static class Engine
         view.Fields.Add(new(idName, keyKinds.Id, "ID", "@person_id"));
         if (entityName != null && layout != Layout.Person) view.Fields.Add(new(entityName, keyKinds.Entity, "additional key", "@entity"));
         Cell[] Keys(Record row) => entityName == null ? [new(row.Id), new(row.Time)] : [new(row.Id), new(row.Entity), new(row.Time)];
-        if (layout == Layout.Measurement)
+        if (layout == Layout.Dyad)
+        {
+            if (entityName == null) throw new InvalidOperationException("The Dyad layout pairs two roles of the same ID (for example patient and spouse). Choose an additional key such as person or role in ID / grouping first.");
+            var roles = dyadRoles is { Count: 2 } ? dyadRoles : DyadPair(records.Select(r => r.Entity), null);
+            view.Fields.Add(new(groupName, keyKinds.Time, "grouping", "@time"));
+            view.Fields.AddRange(variables.Select(v => new OutputField(labels[v.Key], v.Kind, v.Source, v.Key) { Labels = v.Labels }));
+            // Only role-specific variables get a partner copy; ID-level values are the same for both partners.
+            var partners = variables.Where(v => v.EntityBound).ToList();
+            var names = view.Fields.Select(f => f.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var v in partners)
+            {
+                string name = labels[v.Key] + "_partner", candidate = name; int suffix = 2;
+                while (!names.Add(candidate)) candidate = name + "_" + suffix++;
+                view.Fields.Add(new(candidate, v.Kind, v.Source + " (partner)", v.Key + PartnerSuffix) { Labels = v.Labels });
+            }
+            var byKey = records.Where(r => roles.Contains(r.Entity, StringComparer.Ordinal)).ToDictionary(r => (r.Id, r.Entity, r.Time));
+            foreach (var row in records)
+            {
+                if (!roles.Contains(row.Entity, StringComparer.Ordinal)) continue;
+                byKey.TryGetValue((row.Id, row.Entity == roles[0] ? roles[1] : roles[0], row.Time), out var partner);
+                view.Rows.Add(Keys(row).Concat(variables.Select(v => row.Values.TryGetValue(v.Key, out var cell) ? cell : Cell.Empty))
+                    .Concat(partners.Select(v => partner != null && partner.Values.TryGetValue(v.Key, out var cell) ? cell : Cell.Empty)).ToArray());
+            }
+            view.Notes.Add($"Dyads: {roles[0]} and {roles[1]} rows of each ID and {groupName}, each with the partner's values in *_partner columns.");
+        }
+        else if (layout == Layout.Measurement)
         {
             var stacked = variables.Where(v => selectedRows.Contains(v.Key)).ToList();
             var context = variables.Where(v => !selectedRows.Contains(v.Key)).ToList();
             if (stacked.Count == 0) throw new InvalidOperationException("Choose variables to stack into rows. Other variables will stay in their own columns.");
             view.Fields.Add(new(groupName, keyKinds.Time, "grouping", "@time"));
-            view.Fields.AddRange(context.Select(v => new OutputField(labels[v.Key], v.Kind, v.Source, v.Key)));
+            view.Fields.AddRange(context.Select(v => new OutputField(labels[v.Key], v.Kind, v.Source, v.Key) { Labels = v.Labels }));
             var valueKinds = stacked.Select(v => v.Kind).Distinct().ToList();
             var valueKind = valueKinds.Count == 1 ? valueKinds[0] : ValueKind.Text;
             var structuralNames = view.Fields.Select(f => f.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -599,7 +818,8 @@ public static class Engine
         }
         else if (layout == Layout.Person)
         {
-            var times = records.Select(r => r.Time).Where(t => t.Length > 0).Concat(variables.Where(v => v.WideTimes != null).SelectMany(v => v.WideTimes!)).Distinct(StringComparer.Ordinal).ToList();
+            var rank = TimeRanks(records, variables, timeOrder);
+            var times = records.Select(r => r.Time).Where(t => t.Length > 0).Concat(variables.Where(v => v.WideTimes != null).SelectMany(v => v.WideTimes!)).Distinct(StringComparer.Ordinal).OrderBy(t => rank[t]).ToList();
             var entities = records.Select(r => r.Entity).Where(e => e.Length > 0).Distinct(StringComparer.Ordinal).ToList();
             if (entities.Count == 0) entities.Add("");
             var columns = new List<(Variable V, string? Entity, string? Time)>();
@@ -609,14 +829,14 @@ public static class Engine
                 var entityValues = v.EntityBound ? (v.EntityValues is { Count: > 0 } ? v.EntityValues : entities).Cast<string?>().ToList() : new List<string?> { null };
                 foreach (var entity in entityValues)
                 {
-                    var entityTimes = entity == null ? times : records.Where(r => r.Entity.Length == 0 || r.Entity == entity).Select(r => r.Time).Where(t => t.Length > 0).Concat(v.WideTimes ?? []).Distinct(StringComparer.Ordinal).ToList();
+                    var entityTimes = entity == null ? times : records.Where(r => r.Entity.Length == 0 || r.Entity == entity).Select(r => r.Time).Where(t => t.Length > 0).Concat(v.WideTimes ?? []).Distinct(StringComparer.Ordinal).OrderBy(t => rank[t]).ToList();
                     var occasions = v.Timed ? entityTimes.Where(t => v.WideTimes == null || v.WideTimes.Contains(t, StringComparer.Ordinal)).Cast<string?>().ToList() : new List<string?> { null };
                     foreach (var time in occasions)
                     {
                         string name = labels[v.Key] + (entity == null || entity.Length == 0 ? "" : "__" + entity) + (time == null ? "" : "__" + time);
                         if (!outputNames.Add(name)) throw new InvalidOperationException("Wide output names collide. Rename the variables, additional-key labels, or time labels.");
                         string key = v.Key + (entity == null ? "" : "\u001fentity:" + entity) + (time == null ? "" : "\u001ftime:" + time);
-                        view.Fields.Add(new(name, v.Kind, v.Source, key)); columns.Add((v, entity, time));
+                        view.Fields.Add(new(name, v.Kind, v.Source, key) { Labels = v.Labels }); columns.Add((v, entity, time));
                     }
                 }
             }
@@ -650,7 +870,7 @@ public static class Engine
         else
         {
             view.Fields.Add(new(groupName, keyKinds.Time, "grouping", "@time"));
-            view.Fields.AddRange(variables.Select(v => new OutputField(labels[v.Key], v.Kind, v.Source, v.Key)));
+            view.Fields.AddRange(variables.Select(v => new OutputField(labels[v.Key], v.Kind, v.Source, v.Key) { Labels = v.Labels }));
             foreach (var row in records)
                 view.Rows.Add(Keys(row).Concat(variables.Select(v => row.Values.TryGetValue(v.Key, out var cell) ? cell : Cell.Empty)).ToArray());
         }

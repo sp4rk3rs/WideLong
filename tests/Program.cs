@@ -195,7 +195,7 @@ Test("Recorded operations replay from immutable original rows, including undo sn
     s.Steps.Add(new(StepKind.Convert,1,Target:ValueKind.Number)); s.Fields[1].Kind=ValueKind.Number;
     s.Steps.Add(new(StepKind.Cell,1,1,"25","30")); s.Rows[1][1]="30";
     Equal("not given",s.OriginalRows![0][1]); Equal("30",Recipe.Replay(s)[1][1]);
-    var copy=s.Copy(); copy.OriginalRows![0][1]="different"; Equal("not given",s.OriginalRows[0][1]); Equal(3,copy.Steps.Count);
+    var copy=s.Copy(); Equal(true,ReferenceEquals(s.OriginalRows,copy.OriginalRows)); copy.Steps.Clear(); Equal(3,s.Steps.Count);
     var plan=Recipe.Plan(With(s),Layout.PersonTime,MatchMode.AllPeople,false,null,new(),"");
     string sas=SasRecipe.Generate(plan), r=Recipe.R(plan);
     Equal(true,sas.Contains("data history;")); Equal(true,sas.Contains("data prepared_data;")); Equal(true,sas.Contains("not given")); Equal(true,r.Contains("history[2, \"age\"] <- 30  # was \"25\"")); Equal(true,sas.Contains("if _n_ = 2 then age_n = 30;"));
@@ -294,6 +294,8 @@ MissingRulesChecks.Run(Test);
 DiagnosticsChecks.Run(Test);
 CompoundFixtureChecks.Run(Test);
 CompoundKeyChecks.Run(Test);
+RegressionChecks.Run(Test, condition=>Equal(true,condition));
+FeatureChecks.Run(Test, condition=>Equal(true,condition));
 Test("Recommendations keep person and time as separate matching dimensions",()=> {
     var source=Csv.Import("id,person,time,score\nA,Patient,Baseline,1\nA,Spouse,Baseline,2\nA,Patient,Month 3,3\nA,Spouse,Month 3,4", "roles.csv");
     var data=With(source);KeyRecommendations.Recommend(data);Equal(0,source.IdColumn);Equal(1,source.EntityColumn);Equal(2,source.TimeColumn);Equal(4,Engine.Build(data,Layout.PersonTime).Rows.Count);
@@ -305,6 +307,41 @@ Source NumericIds(string text, string name, params int[] columns)
     foreach(int c in columns){s.Steps.Add(new(StepKind.Convert,c,Target:ValueKind.Number));foreach(var row in s.Rows)row[c]=Values.Convert(row[c],ValueKind.Number);s.Fields[c].Kind=ValueKind.Number;}
     return s;
 }
+Test("Leading-zero ID conversions preserve matching, originals and replay across five files",()=> {
+    var data=Examples.All[0].Create();
+    var targets=data.Sources.Select(s=>(Source:s,Column:s.IdColumn)).ToList();
+    Equal(4800,targets.Sum(t=>t.Source.Rows.Count));
+    Equal(0,Values.KeyConversionCollisions(targets,ValueKind.Number,"yyyy-MM-dd"));
+    var before=Engine.Build(data,Layout.PersonTime);
+    var beforeWide=Engine.Build(data,Layout.Person);
+    foreach(var (source,column) in targets) {
+        var preview=Values.PreviewConversion(source,[column],ValueKind.Number,"yyyy-MM-dd");
+        Equal(0,preview.Invalid); Equal(source.Rows.Count,preview.LeadingZeroLoss);
+        source.CaptureOriginal();
+        source.Steps.Add(new(StepKind.Convert,column,Target:ValueKind.Number,MissingTokens:source.EffectiveMissingTokens(column).ToArray()));
+        foreach(var row in source.Rows) row[column]=Values.Convert(row[column],ValueKind.Number);
+        source.Fields[column].Kind=ValueKind.Number;
+        Equal("00001",source.OriginalRows![0][column]); Equal("1",source.Rows[0][column]);
+    }
+    Equal(before.Rows.Count,Engine.Build(data,Layout.PersonTime).Rows.Count);
+    Equal(beforeWide.Rows.Count,Engine.Build(data,Layout.Person).Rows.Count);
+    foreach(var layout in new[]{Layout.PersonTime,Layout.Person}) {
+        var view=Engine.Build(data,layout); Equal(ValueKind.Number,view.Fields[0].Kind);
+        var plan=Recipe.Plan(data,layout,MatchMode.AllPeople,false,null,new ViewPreferences(),"");
+        Equal(ValueKind.Number,plan.Columns.Single(c=>c.Role=="id").Field.Kind);
+        Equal(true,Recipe.R(plan).Contains("as.numeric(")); Equal(true,SasRecipe.Generate(plan).Contains("input("));
+    }
+});
+Test("Key conversion rejects distinct values collapsing within and across files",()=> {
+    var same=Csv.Import("id,x\n007,a\n7,b","same.csv");
+    Equal(1,Values.KeyConversionCollisions([(same,0)],ValueKind.Number,"yyyy-MM-dd"));
+    var a=Csv.Import("id,x\n007,a\n007,b","a.csv");
+    var b=Csv.Import("id,x\n7,c","b.csv");
+    Equal(0,Values.KeyConversionCollisions([(a,0)],ValueKind.Number,"yyyy-MM-dd"));
+    Equal(1,Values.KeyConversionCollisions([(a,0),(b,0)],ValueKind.Number,"yyyy-MM-dd"));
+    Equal(0,Values.KeyConversionCollisions([(a,0),(b,0)],ValueKind.Text,"yyyy-MM-dd"));
+    Equal(1,Values.KeyConversionCollisions([(Csv.Import("id,x\n201.0,a\n 201,b","decimal.csv"),0)],ValueKind.Number,"yyyy-MM-dd"));
+});
 Test("Converted ID columns produce a numeric combined ID that sorts as numbers",()=> {
     var a=NumericIds("id,visit,score\n10,1,5\n2,1,6\n1,1,7","a.csv",0); a.TimeColumn=1;
     var b=NumericIds("id,age\n10,40\n2,30\n1,20","b.csv",0);
@@ -409,6 +446,10 @@ if(!string.IsNullOrWhiteSpace(rscript) && File.Exists(rscript))
         => RReplay.Run(args[0], rscript!, name, s, layout, stack, match, filter, rowNames, rules, allowUnsupportedSas);
     Test("Native R reproduces numeric IDs, numeric ID sorting and upper-case text ordering", () =>
     {
+        var paddedA=NumericIds("id,visit,label\n00010,m0,a\n00002,m0,b\n00001,m0,c\n00002,m3,d","padded_a.csv",0); paddedA.TimeColumn=1;
+        var paddedB=NumericIds("id,age\n00010,40\n00002,30\n00001,20","padded_b.csv",0);
+        RunRCase("leading_zero_ids_long",With(paddedA,paddedB),Layout.PersonTime,edits:true);
+        RunRCase("leading_zero_ids_wide",With(paddedA,paddedB),Layout.Person,edits:true);
         var a=NumericIds("id,visit,label\n10,m0,a_b\n2,m0,ab\n1,m0,Ab\n2,m3,a_c","numeric_a.csv",0); a.TimeColumn=1;
         var b=NumericIds("id,age\n10,40\n2,30\n1,20","numeric_b.csv",0);
         RunRCase("numeric_ids_long",With(a,b),Layout.PersonTime,edits:true);
@@ -500,6 +541,23 @@ if(!string.IsNullOrWhiteSpace(rscript) && File.Exists(rscript))
         var wide=Csv.Import("id,person,nickname,score_m0,score_m3\nA,Patient,Pat,10,11\nA,Spouse,Sue,20,21", "role_scores.csv");wide.EntityColumn=1;
         var times=Csv.Import("id,time,calendar_status\nA,m0,Start\nA,m3,Later", "calendar.csv");
         RunRCase("compound_entity_free_time",With(wide,times),Layout.PersonTime);
+    });
+    Test("Native R repeats key type changes (dates, padded numbers, filtered and partially converted keys)",()=> {
+        RunRCase("date_time_key_long",RegressionChecks.DateKeyFixture(),Layout.PersonTime);
+        RunRCase("date_time_key_wide",RegressionChecks.DateKeyFixture(),Layout.Person);
+        RunRCase("padded_time_key_wide",RegressionChecks.PaddedTimeFixture(),Layout.Person);
+        RunRCase("filtered_converted_key",RegressionChecks.FilteredKeyFixture(),Layout.PersonTime);
+        RunRCase("partial_id_conversion",RegressionChecks.PartialIdFixture(),Layout.PersonTime);
+        RunRCase("replace_on_filtered_role",RegressionChecks.ReplacedFilterFixture(),Layout.PersonTime);
+    });
+    Test("Native R reproduces scale scores and dyad partner columns",()=> {
+        RunRCase("scale_scores_source",FeatureChecks.ScaleFixture(),Layout.Source);
+        RunRCase("scale_scores_long",FeatureChecks.ScaleFixture(),Layout.PersonTime);
+        RunRCase("dyad_pairs",FeatureChecks.DyadFixture(),Layout.Dyad);
+        var two=FeatureChecks.DyadFixture(false); two.Sources[0].KeepRules.Add(new(1,["Patient","Spouse"],false)); RunRCase("dyad_inferred_roles",two,Layout.Dyad);
+    });
+    Test("Native R skips Qualtrics description rows",()=> {
+        RunRCase("qualtrics_preset",FeatureChecks.QualtricsFixture(),Layout.Source,allowUnsupportedSas:true);
     });
     Test("Native R readers retain single-column empty records and Unicode",()=> {
         var source=Csv.Import("value\n\n\"\"\nα\nNA\n\"hello\nworld\"\n", "single.csv");source.MissingTokens=[];

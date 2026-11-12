@@ -25,6 +25,10 @@ public partial class MainWindow
             body.Children.Add(ReadOnlyTable(info.Sample,190));
             var nameText = new TextBlock { Text=info.RenamedColumns.Count == 0 ? "All column names stay as displayed." : string.Join("\n",info.RenamedColumns.Select(n=>n.DisplayName+" → "+n.ExportName)),FontSize=12,Margin=new(8),TextWrapping=TextWrapping.Wrap };
             body.Children.Add(new Expander { Header=info.RenamedColumns.Count == 0 ? "Column names: unchanged" : $"{info.RenamedColumns.Count} column names normalized for SAS compatibility",Content=new ScrollViewer { Content=nameText,MaxHeight=90,VerticalScrollBarVisibility=ScrollBarVisibility.Auto },Margin=new(0,9,0,0),IsExpanded=info.RenamedColumns.Count>0 });
+            var summaryRows = info.Summaries.Select(v => new Cell[] { new(v.Name), new(v.Kind.ToString()), new(v.N.ToString("N0")), new($"{v.Missing:N0} ({v.MissingShare:P0})"), new(v.Distinct.ToString("N0")), new(v.Min ?? "—"), new(v.Max ?? "—"), new(v.Mean is { } mean ? mean.ToString("G6", System.Globalization.CultureInfo.CurrentCulture) : "—"), new(v.Flags.Length == 0 ? "" : "Check: " + v.Flags) }).ToList();
+            var summaryView = new View { Fields = new[] { "Variable", "Type", "N", "Missing", "Distinct", "Minimum", "Maximum", "Mean", "Check" }.Select(h => new OutputField(h, ValueKind.Text, "")).ToList(), Rows = summaryRows };
+            int flagged = info.Summaries.Count(v => v.Flags.Length > 0);
+            body.Children.Add(new Expander { Header = $"Variable summary · {info.Summaries.Count:N0} variables" + (flagged > 0 ? $" · {flagged:N0} to check" : ""), Content = ReadOnlyTable(summaryView, Math.Min(260, 40 + 26 * Math.Max(1, summaryRows.Count))), Margin = new(0, 9, 0, 0), IsExpanded = flagged > 0 });
             var tab = new TabItem { Header=shape+$" · {info.Rows:N0} × {info.Columns:N0}",Content=new ScrollViewer { Content=body,VerticalScrollBarVisibility=ScrollBarVisibility.Auto } };
             tabs.Items.Add(tab);
             if (shape == ShapeName(layout)) tabs.SelectedItem=tab;

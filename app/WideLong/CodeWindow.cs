@@ -25,12 +25,14 @@ public partial class MainWindow
 internal sealed class CodeWindow : Window
 {
     private readonly CodePlan plan;
-    private readonly ComboBox language = new() { ItemsSource = new[] { "SAS", "R" }, SelectedIndex = 0, Width = 140, Margin = new(0, 0, 14, 0) };
+    private readonly ComboBox language = new() { ItemsSource = new[] { "R", "SAS" }, SelectedIndex = 0, Width = 140, Margin = new(0, 0, 14, 0) };
     private readonly TextBox code = new() { FontFamily = new FontFamily("Consolas"), FontSize = 12, IsReadOnly = true, AcceptsReturn = true, AcceptsTab = true, TextWrapping = TextWrapping.NoWrap, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new(14), Background = new SolidColorBrush(Color.FromRgb(251, 249, 253)) };
     private readonly TextBlock status = new() { Margin = new(0, 8, 0, 8), FontSize = 12 };
     private readonly Button save = new() { Content = "Save code…", Style = (Style)Application.Current.FindResource("Primary") };
     private readonly Button copy = new() { Content = "Copy code" };
     private string? currentCode;
+    /// <summary>R is listed first: its generated code is verified by running it in R; generated SAS has not yet been run in SAS.</summary>
+    private bool Sas => language.SelectedIndex == 1;
 
     public CodeWindow(Window owner, CodePlan plan)
     {
@@ -51,8 +53,8 @@ internal sealed class CodeWindow : Window
     {
         try
         {
-            currentCode = language.SelectedIndex == 0 ? SasRecipe.Generate(plan) : Recipe.R(plan); code.Text = currentCode;
-            status.Foreground = (Brush)FindResource("Accent"); status.Text = language.SelectedIndex == 0 ? "SAS: reads each original file, cleans it, combines the files and ends with WORK.PREPARED_DATA. Edit the folder line for your SAS machine. Generated SAS has not been run in SAS here." : "R: reads each original file, cleans it, combines the files and ends with `prepared`. Base R only; no packages or network.";
+            currentCode = Sas ? SasRecipe.Generate(plan) : Recipe.R(plan); code.Text = currentCode;
+            status.Foreground = (Brush)FindResource("Accent"); status.Text = Sas ? "SAS: reads each original file, cleans it, combines the files and ends with WORK.PREPARED_DATA. Edit the folder line for your SAS machine. Generated SAS has not been run in SAS here." : "R: reads each original file, cleans it, combines the files and ends with `prepared`. Base R only; no packages or network.";
             save.IsEnabled = copy.IsEnabled = true;
         }
         catch (InvalidOperationException ex) { currentCode = null; code.Clear(); status.Foreground = Brushes.DarkRed; status.Text = ex.Message; save.IsEnabled = copy.IsEnabled = false; }
@@ -61,7 +63,7 @@ internal sealed class CodeWindow : Window
     private void Save()
     {
         if (currentCode == null) return;
-        var picker = new SaveFileDialog { Title = "Save reproducible cleaning code", FileName = "clean", Filter = language.SelectedIndex == 0 ? "SAS program|*.sas" : "R script|*.R", AddExtension = true, OverwritePrompt = true };
+        var picker = new SaveFileDialog { Title = "Save reproducible cleaning code", FileName = "clean", Filter = Sas ? "SAS program|*.sas" : "R script|*.R", AddExtension = true, OverwritePrompt = true };
         if (picker.ShowDialog(this) != true) return;
         if (Original(picker.FileName)) { MessageBox.Show(this, "Choose a different filename. Original imports cannot be overwritten."); return; }
         try { File.WriteAllText(picker.FileName, currentCode, new UTF8Encoding(false)); status.Text = "Saved " + Path.GetFileName(picker.FileName); }

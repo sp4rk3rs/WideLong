@@ -49,6 +49,31 @@ public static partial class Export
         return names;
     }
 
+    // ---- Value labels (1 = "Strongly disagree") ----
+    /// <summary>Labelled values in a stable order: numbers numerically, text ordinally.</summary>
+    public static List<KeyValuePair<string, string>> OrderedLabels(OutputField field) => field.Labels == null ? [] :
+        field.Kind == ValueKind.Number
+            ? field.Labels.OrderBy(p => decimal.TryParse(p.Key, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) ? d : decimal.MaxValue).ThenBy(p => p.Key, StringComparer.Ordinal).ToList()
+            : field.Labels.OrderBy(p => p.Key, StringComparer.Ordinal).ToList();
+    public static bool HasLabels(OutputField field) => field.Labels is { Count: > 0 } && field.Kind is ValueKind.Number or ValueKind.Text;
+    public static string DescribeLabels(OutputField field) => string.Join("; ", OrderedLabels(field).Select(p => p.Key + " = " + p.Value));
+    /// <summary>R named vector c("Strongly disagree" = 1, ...), the labelled-vector convention haven/labelled read.</summary>
+    public static string RLabelVector(OutputField field) => "c(" + string.Join(", ", OrderedLabels(field).Select(p => Recipe.RQuote(p.Value) + " = " + (field.Kind == ValueKind.Number ? p.Key : Recipe.RQuote(p.Key)))) + ")";
+    /// <summary>SAS format names wla, wlb, … (letters only: format names cannot end in a digit).</summary>
+    public static string SasFormatName(int index, bool text) { string letters = ""; int n = index; do { letters = (char)('a' + n % 26) + letters; n = n / 26 - 1; } while (n >= 0); return (text ? "$" : "") + "wl" + letters; }
+    /// <summary>A PROC FORMAT step for the labelled columns; returns the format name per column index.</summary>
+    public static (string Code, Dictionary<int, string> Formats) SasFormats(IReadOnlyList<OutputField> fields)
+    {
+        var formats = new Dictionary<int, string>(); var b = new StringBuilder();
+        for (int i = 0; i < fields.Count; i++)
+        {
+            if (!HasLabels(fields[i])) continue;
+            string name = SasFormatName(formats.Count, fields[i].Kind == ValueKind.Text); formats[i] = name;
+            b.Append($"  value {name} ").Append(string.Join(" ", OrderedLabels(fields[i]).Select(p => (fields[i].Kind == ValueKind.Number ? p.Key : Recipe.SasQuote(p.Key)) + " = " + Recipe.SasQuote(p.Value)))).Append(";\n");
+        }
+        return (formats.Count == 0 ? "" : "proc format;\n" + b + "run;\n", formats);
+    }
+
     public static void SaveBundle(string path, View view, ExportTarget target = ExportTarget.R) => SaveBundles(path, new Dictionary<string, View> { [""] = view }, target);
 
     /// <summary>File names inside an export. With a dataset name every file starts with it ("NAME.csv", "NAME import.R");
@@ -90,7 +115,11 @@ public static partial class Export
         // Validate the complete bundle before opening the selected destination.
         string token = MissingToken(view, target, true);
         ValidateBundle(view, token);
-        var names = SasNames(view);
+        // R reads the CSV with check.names = FALSE, so an R export keeps the display names that clean.R also produces.
+        // SAS (and the legacy two-script bundle) need SAS-compatible names.
+        bool displayNames = name != null && target == ExportTarget.R;
+        var sasNames = SasNames(view);
+        var names = displayNames ? view.Fields.Select(f => f.Name).ToList() : sasNames;
         var lengths = new int[view.Fields.Count];
         for (int i = 0; i < lengths.Length; i++)
         {
@@ -106,16 +135,17 @@ public static partial class Export
         Entry(files[0], w => WriteData(w, compatible, target, token));
         Entry(files[1], w =>
         {
-            w.WriteLine("export_name,display_name,type,source");
-            for (int i = 0; i < names.Count; i++) w.WriteLine(string.Join(",", new[] { names[i], view.Fields[i].Name, view.Fields[i].Kind.ToString(), view.Fields[i].Source }.Select(Csv.Escape)));
+            bool labelled = view.Fields.Any(HasLabels);
+            w.WriteLine("export_name,display_name,type,source" + (labelled ? ",value_labels" : ""));
+            for (int i = 0; i < names.Count; i++) w.WriteLine(string.Join(",", new[] { names[i], view.Fields[i].Name, view.Fields[i].Kind.ToString(), view.Fields[i].Source }.Concat(labelled ? [HasLabels(view.Fields[i]) ? DescribeLabels(view.Fields[i]) : ""] : []).Select(Csv.Escape)));
         });
         if (name == null || target == ExportTarget.R) Entry(files.First(f => f.EndsWith("import.R", StringComparison.Ordinal)), w => w.Write(RScript(view, target, token, files[0])));
-        if (name == null || target == ExportTarget.Sas) Entry(files.First(f => f.EndsWith("import.sas", StringComparison.Ordinal)), w => w.Write(SasScript(view, names, lengths, lrecl, target, token, files[0])));
+        if (name == null || target == ExportTarget.Sas) Entry(files.First(f => f.EndsWith("import.sas", StringComparison.Ordinal)), w => w.Write(SasScript(view, sasNames, lengths, lrecl, target, token, files[0])));
         if (cleaning != null) Entry(files.First(f => f.Contains(" clean.", StringComparison.Ordinal)), w => w.Write(cleaning));
         if (name != null)
         {
             string script = target == ExportTarget.R ? name + " import.R" : target == ExportTarget.Sas ? name + " import.sas" : "";
-            var lines = new List<string> { $"{name} — WideLong {CodeModel.Version} export", "", $"{name}.csv — the prepared dataset (column names are SAS-compatible; see the dictionary)", $"{name} dictionary.csv — each column's export name, display name, type and source file" };
+            var lines = new List<string> { $"{name} — WideLong {CodeModel.Version} export", "", $"{name}.csv — the prepared dataset (" + (displayNames ? "column names as shown in WideLong" : "column names are SAS-compatible; see the dictionary") + ")", $"{name} dictionary.csv — each column's export name, display name, type and source file" };
             if (script.Length > 0) lines.Add($"{script} — reads {name}.csv with the right types and missing values");
             if (cleaning != null) lines.Add($"{files.First(f => f.Contains(" clean.", StringComparison.Ordinal))} — rebuilds {name}.csv from your ORIGINAL files, with every cleaning step written out and labelled");
             lines.AddRange(["", "Extract this folder. In R, set it as the working directory and source the import script. In SAS, set the folder macro variable in the import program. Both work offline.",
@@ -125,7 +155,7 @@ public static partial class Export
             Entry(files[^1], w => w.Write(string.Join("\n", lines) + "\n"));
             return entries;
         }
-        Entry("README.txt", w => w.WriteLine("WideLong 0.5.3 export\n\nExtract this folder, set it as the working directory in R and source import.R, or set folder in import.sas. Both scripts work offline. For a wide/long ZIP, run each subfolder separately.\n\nWide: one row per ID, with optional role/entity and repeated observations in separate columns. Long: one row per ID + any configured additional key + time/grouping value. Sorting, column names and order use the saved preferences for that layout; the current text filter is applied to each exported layout.\n\nCSV headers use unique SAS-compatible names; dictionary.csv maps display names, types and sources. Missing values use the selected software convention. R-target ZIP readers preserve literal NA text, genuine empty strings and missingness. SAS-target exports follow SAS character blank conventions. SAS treats character blanks as missing. SAS cannot distinguish a genuine empty character string from character missing. Numeric/date/Boolean missing in SAS is .; in R it is typed NA. Keep long identifiers or exact high-precision values as Text.\n\nOnly this explicit export writes files. Original source files are unchanged. No session or transformation recipe is included."));
+        Entry("README.txt", w => w.WriteLine("WideLong " + CodeModel.Version + " export\n\nExtract this folder, set it as the working directory in R and source import.R, or set folder in import.sas. Both scripts work offline. For a wide/long ZIP, run each subfolder separately.\n\nWide: one row per ID, with optional role/entity and repeated observations in separate columns. Long: one row per ID + any configured additional key + time/grouping value. Sorting, column names and order use the saved preferences for that layout; the current text filter is applied to each exported layout.\n\nCSV headers use unique SAS-compatible names; dictionary.csv maps display names, types and sources. Missing values use the selected software convention. R-target ZIP readers preserve literal NA text, genuine empty strings and missingness. SAS-target exports follow SAS character blank conventions. SAS treats character blanks as missing. SAS cannot distinguish a genuine empty character string from character missing. Numeric/date/Boolean missing in SAS is .; in R it is typed NA. Keep long identifiers or exact high-precision values as Text.\n\nOnly this explicit export writes files. Original source files are unchanged. No session or transformation recipe is included."));
         return entries;
     }
 
@@ -168,12 +198,22 @@ public static partial class Export
                 _ => ""
             });
         }
+        for (int i = 0; i < view.Fields.Count; i++)
+        {
+            if (!HasLabels(view.Fields[i])) continue;
+            string column = $"data[[{i + 1}]]"; var labels = OrderedLabels(view.Fields[i]);
+            bool covered = view.Rows.All(r => r[i].Missing || view.Fields[i].Labels!.ContainsKey(r[i].Value));
+            b.AppendLine($"# Value labels for {view.Fields[i].Name}: {DescribeLabels(view.Fields[i]).Replace("\n", " ")}");
+            if (covered) b.AppendLine($"{column} <- factor({column}, levels = c({string.Join(", ", labels.Select(p => view.Fields[i].Kind == ValueKind.Number ? p.Key : Recipe.RQuote(p.Key)))}), labels = c({string.Join(", ", labels.Select(p => Recipe.RQuote(p.Value)))}))");
+            else b.AppendLine($"attr({column}, \"labels\") <- {RLabelVector(view.Fields[i])}  # some values have no label, so the values are kept");
+        }
         b.AppendLine("# data is ready; nothing is saved automatically."); return b.ToString();
     }
 
     private static string SasScript(View view, List<string> names, int[] lengths, long lrecl, ExportTarget target, string token, string dataFile = "data.csv")
     {
-        var b = new StringBuilder("/* Set folder to the extracted export directory. No network required. */\n%let folder = C:\\path\\to\\export;\nfilename dhcsv \"&folder.\\" + dataFile.Replace("%", "%%") + "\" encoding='utf-8';\ndata work.prepared;\n");
+        var (formatCode, formats) = SasFormats(view.Fields);
+        var b = new StringBuilder("/* Set folder to the extracted export directory. No network required. */\n%let folder = C:\\path\\to\\export;\n" + formatCode + "filename dhcsv \"&folder.\\" + dataFile.Replace("%", "%%") + "\" encoding='utf-8';\ndata work.prepared;\n");
         for (int i = 0; i < names.Count; i++)
             b.AppendLine($"  length {names[i]} {(view.Fields[i].Kind == ValueKind.Text ? "$" + lengths[i] : "8")};");
         // Generated temporary names must not collide with requested output names.
@@ -199,6 +239,7 @@ public static partial class Export
                 _ => ""
             });
         }
+        if (formats.Count > 0) b.AppendLine("  format " + string.Join(" ", formats.Select(p => $"{names[p.Key]} {p.Value}.")) + ";  /* value labels */");
         b.AppendLine("  drop " + string.Join(" ", temps) + ";\nrun;\nfilename dhcsv clear;");
         return b.ToString();
     }

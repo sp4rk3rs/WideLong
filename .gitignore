@@ -22,9 +22,5 @@ stress-output/
 *.zip
 *.log
 
-# Include only the logo required by the app and repository README.
-!/Codex/output/
-/Codex/output/*
-!/Codex/output/branding/
-/Codex/output/branding/*
-!/Codex/output/branding/WideLongLogo.png
+# Local assistant scratch must not be committed.
+/Codex/

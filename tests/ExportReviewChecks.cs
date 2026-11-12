@@ -15,6 +15,16 @@ public static class ExportReviewChecks
             var sas=Export.Review(view,ExportTarget.Sas,true);check(sas.Sample.Rows[0][2].Value=="."&&sas.Sample.Rows[1][1].Value=="");
             var csv=Export.Review(view,ExportTarget.Generic,false);check(csv.RenamedColumns.Count==0&&csv.Sample.Rows[0][2].Value=="");
         });
+        test("Export review summarizes each variable and flags values to check",()=>
+        {
+            var rows=string.Join("\n",Enumerable.Range(1,12).Select(i=>$"{i},{(i==12?"900":(10+i%3).ToString())},{(i%2==0?"":"x")},same"));
+            var source=Csv.Import("id,score,half,constant\n"+rows+"\n","summary.csv");source.Fields[1].Kind=ValueKind.Number;
+            var summary=Export.Summarize(Engine.SourceView(source));
+            var score=summary.Single(v=>v.Name=="score");check(score.N==12&&score.Min=="10"&&score.Max=="900"&&score.Outliers==1&&score.Flags.Contains("3×IQR"));
+            check(summary.Single(v=>v.Name=="half").Missing==6&&summary.Single(v=>v.Name=="constant").Flags.Contains("one value"));
+            var named=Export.Review(Engine.SourceView(Csv.Import("id,long variable name\n1,a","named.csv")),ExportTarget.R,true,"study");
+            check(named.RenamedColumns.Count==0&&named.Summaries.Count==2);
+        });
         test("Export review blocks invalid bundles before the destination is chosen",()=>
         {
             bool rejected=false;try{Export.Review(Engine.SourceView(Csv.Import("id,note\n1,\"two\nlines\"", "multiline.csv")),ExportTarget.R,true);}catch(InvalidOperationException){rejected=true;}check(rejected);

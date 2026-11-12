@@ -29,7 +29,8 @@ static class RReplay
             Encoding encoding=source.EncodingName=="windows-1252"?Encoding.GetEncoding(1252):source.EncodingName=="UTF-16LE"?Encoding.Unicode:new UTF8Encoding(false);
             using var writer=new StreamWriter(Path.Combine(folder,source.Name),false,encoding);
             string Escape(string value)=>value.Length==0 || value.Contains(source.Delimiter) || value.IndexOfAny(['"','\r','\n'])>=0?"\""+value.Replace("\"","\"\"")+"\"":value;
-            writer.WriteLine(string.Join(source.Delimiter,source.Fields.Select(f=>Escape(f.Original))));
+            writer.WriteLine(string.Join(source.Delimiter,source.Fields.Take(source.FileColumns).Select(f=>Escape(f.Original))));
+            foreach(var row in source.SkippedRows)writer.WriteLine(string.Join(source.Delimiter,row.Select(Escape)));
             foreach(var row in source.OriginalRows!)writer.WriteLine(string.Join(source.Delimiter,row.Select(Escape)));
         }
         var plan=Recipe.Plan(s,layout,match,stack,s.Sources[0].Key,prefs,filter,rules);

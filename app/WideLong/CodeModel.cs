@@ -16,6 +16,11 @@ internal sealed record MissingOp(List<int> Cols, ValueKind Kind, string[] Tokens
 internal sealed record KeepRuleSpec(int Col, ValueKind Kind, string[] Values, bool KeepMissing, string[] Removed, bool RemovesMissing);
 internal sealed record KeepOp(List<KeepRuleSpec> Rules) : CleanOp;
 internal sealed record SelectOp(List<int> Keep, List<int> Drop) : CleanOp;
+/// <summary>A type change on a matching key. Keys stay text while files are combined, so the values are rewritten to the
+/// application's canonical text for that type (00001 → "1", 3/5/2025 → "2025-03-05", yes → "true"); the final step types them.</summary>
+internal sealed record KeyNormalizeOp(int Col, ValueKind Target, string DateFormat) : CleanOp;
+/// <summary>A scale score (derived column Col) from numeric item columns, after missing-value codes are applied.</summary>
+internal sealed record ScaleOp(int Col, ScaleScore Scale, List<int> Items) : CleanOp;
 
 internal sealed class FilePlan
 {
@@ -53,7 +58,8 @@ internal sealed class CodeModel
     public Dictionary<string, string> Labels { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, CodeVariable> VariablesByKey { get; } = new(StringComparer.Ordinal);
 
-    public static readonly string Version = "0.5.3";
+    /// <summary>The release version, set once in Directory.Build.props.</summary>
+    public static readonly string Version = (typeof(CodeModel).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false).FirstOrDefault() as System.Reflection.AssemblyInformationalVersionAttribute)?.InformationalVersion.Split('+')[0] ?? "0.0.0";
 
     public string Label(FilePlan file, int column) => Plan.Stack ? Labels["stack:" + file.Source.Fields[column].Name] : Labels[file.Source.Key + ":" + column];
     public string MeasureLabel(FilePlan file, string measure) => Plan.Stack ? Labels["stack:" + measure] : Labels[file.Source.Key + ":measure:" + measure];
@@ -97,7 +103,8 @@ internal sealed class CodeModel
         int n = s.Fields.Count;
         bool[] used = Enumerable.Range(0, n).Select(c => s.Fields[c].Keep || s.IsKeyColumn(c) || s.KeepRules.Any(r => r.Column == c)).ToArray();
         var kinds = new ValueKind[n];
-        var rows = s.OriginalRows!.Select(r => (string[])r.Clone()).ToList();
+        // Scale scores are derived columns after the file's own columns; they start empty and are computed below.
+        var rows = s.OriginalRows!.Select(r => { var copy = new string[n]; Array.Fill(copy, ""); Array.Copy(r, copy, Math.Min(r.Length, n)); return copy; }).ToList();
         var widths = Enumerable.Range(0, n).Select(c => Math.Max(1, rows.Select(r => Encoding.UTF8.GetByteCount(r[c])).DefaultIfEmpty(1).Max())).ToArray();
         void Widen(int c, string value) => widths[c] = Math.Max(widths[c], Encoding.UTF8.GetByteCount(value));
 
@@ -120,15 +127,18 @@ internal sealed class CodeModel
             else
             {
                 var tokens = step.MissingTokens ?? [""];
-                // Matching keys are never rewritten by a type change, so they stay text until the final step.
-                if (emit && !s.IsKeyColumn(c)) { AddConvert(file, c, kinds[c], step.Target, step.DateFormat, step.Target == ValueKind.Text ? [] : Present(rows, c, tokens)); kinds[c] = step.Target; }
+                // Matching keys stay text until the final step, but a conversion still rewrites their values
+                // (00001 → 1, 3/5/2025 → 2025-03-05). Repeat it as canonical text so keys match like they do in the app.
+                if (emit && s.IsKeyColumn(c)) { if (step.Target != ValueKind.Text && rows.Any(r => Values.ConvertWithMissing(r[c], step.Target, step.DateFormat, tokens) != r[c])) file.Ops.Add(new KeyNormalizeOp(c, step.Target, step.DateFormat)); }
+                else if (emit) { AddConvert(file, c, kinds[c], step.Target, step.DateFormat, step.Target == ValueKind.Text ? [] : Present(rows, c, tokens)); kinds[c] = step.Target; }
                 foreach (var r in rows) { r[c] = Values.ConvertWithMissing(r[c], step.Target, step.DateFormat, tokens); Widen(c, r[c]); }
             }
         }
         // Variables whose type was set without a recorded step (built-in examples) are typed here.
+        for (int c = s.FileColumns; c < n; c++) kinds[c] = ValueKind.Number;
         for (int c = 0; c < n; c++)
         {
-            if (!used[c] || s.IsKeyColumn(c) || s.Fields[c].Kind == kinds[c]) continue;
+            if (!used[c] || s.IsKeyColumn(c) || s.IsDerived(c) || s.Fields[c].Kind == kinds[c]) continue;
             var tokens = s.EffectiveMissingTokens(c).ToArray();
             AddConvert(file, c, kinds[c], s.Fields[c].Kind, "yyyy-MM-dd", s.Fields[c].Kind == ValueKind.Text ? [] : Present(rows, c, tokens));
             foreach (var r in rows) { try { r[c] = Values.ConvertWithMissing(r[c], s.Fields[c].Kind, "yyyy-MM-dd", tokens); } catch (InvalidOperationException) { } }
@@ -143,7 +153,16 @@ internal sealed class CodeModel
             var group = missing.FirstOrDefault(g => g.Kind == kinds[c] && g.Tokens.SequenceEqual(tokens));
             if (group != null) group.Cols.Add(c); else missing.Add(new MissingOp([c], kinds[c], tokens));
         }
-        file.Ops.AddRange(missing);
+        file.Ops.AddRange(missing.Where(op => op.Cols.All(c => !s.IsDerived(c))));
+        // Scale scores use the cleaned, typed items with missing-value codes removed, exactly as the application computes them.
+        Scales.Compute(s, rows);
+        for (int i = 0; i < s.Scales.Count; i++)
+        {
+            int c = s.FileColumns + i; foreach (var r in rows) Widen(c, r[c]);
+            var items = Scales.ItemColumns(s, s.Scales[i]);
+            if (items.Any(x => x < 0 || kinds[x] != ValueKind.Number)) throw new InvalidOperationException($"The scale {s.Fields[c].Name} needs numeric items. Convert its items to Number again, or remove the scale.");
+            if (used[c]) file.Ops.Add(new ScaleOp(c, s.Scales[i], items));
+        }
         if (s.KeepRules.Count > 0)
             file.Ops.Add(new KeepOp(s.KeepRules.Select(rule =>
             {
@@ -152,7 +171,7 @@ internal sealed class CodeModel
                 return new KeepRuleSpec(rule.Column, kinds[rule.Column], rule.Values, rule.KeepMissing, removed, removesMissing);
             }).ToList()));
         var keep = Enumerable.Range(0, n).Where(c => s.Fields[c].Keep || s.IsKeyColumn(c)).ToList();
-        var drop = Enumerable.Range(0, n).Where(c => !keep.Contains(c)).ToList();
+        var drop = Enumerable.Range(0, n).Where(c => !keep.Contains(c) && !s.IsDerived(c)).ToList();  // unkept scale scores are never created
         if (drop.Count > 0) file.Ops.Add(new SelectOp(keep, drop));
         for (int c = 0; c < n; c++)
         {
@@ -179,7 +198,7 @@ internal sealed class CodeModel
         return string.Join(", ", list.Take(max).Select(Show)) + (list.Count > max ? $" and {list.Count - max:N0} more" : "");
     }
     public static string KindWord(ValueKind kind) => kind switch { ValueKind.Number => "numbers", ValueKind.Date => "dates", ValueKind.Boolean => "true/false values", _ => "text" };
-    public static string ShapeWord(Layout layout) => layout switch { Layout.Person => "wide: one row per ID", Layout.PersonTime => "long: one row per ID and time", Layout.Measurement => "custom variable/value rows", _ => "one file's rows" };
+    public static string ShapeWord(Layout layout) => layout switch { Layout.Person => "wide: one row per ID", Layout.PersonTime => "long: one row per ID and time", Layout.Measurement => "custom variable/value rows", Layout.Dyad => "dyads: one row per ID, role and time with partner columns", _ => "one file's rows" };
 
     /// <summary>Breaks a long statement after commas (R) or spaces (SAS), never inside quotes or a trailing R comment.</summary>
     public static string Wrap(string line, bool sas, int width = 110)
@@ -211,7 +230,9 @@ internal sealed class CodeModel
         var folders = Files.Select(f => Path.GetDirectoryName(f.Source.ImportPath!)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         return folders.Count == 1 ? folders[0] : null;
     }
-    public string FileReference(FilePlan file, bool portable) => portable || file.Source.ImportPath == null || CommonFolder(portable) != null ? file.Source.Name : file.Source.ImportPath;
+    /// <summary>The file name on disk. A file imported twice shows as "data (2).csv" in WideLong but is still read from data.csv.</summary>
+    public static string DiskName(FilePlan file, bool portable) => portable || file.Source.ImportPath == null ? file.Source.Name : Path.GetFileName(file.Source.ImportPath);
+    public string FileReference(FilePlan file, bool portable) => portable || file.Source.ImportPath == null || CommonFolder(portable) != null ? DiskName(file, portable) : file.Source.ImportPath;
 
     /// <summary>Lower-case object/dataset names from file names, unique and not clashing with names the scripts use.</summary>
     public List<string> ObjectNames(int maxLength, IEnumerable<string> reserved)

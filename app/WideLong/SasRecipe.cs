@@ -12,9 +12,11 @@ public static class SasRecipe
 
     public static string DateInformat(string format) => format switch
     {
-        "yyyy-MM-dd" or "yyyy/MM/dd" => "yymmdd10.", "MM/dd/yyyy" or "MM-dd-yyyy" => "mmddyy10.",
-        "dd/MM/yyyy" or "dd-MM-yyyy" => "ddmmyy10.", "yyyyMMdd" => "yymmdd8.",
-        _ => throw new InvalidOperationException("SAS code currently supports yyyy-MM-dd, yyyy/MM/dd, MM/dd/yyyy, dd/MM/yyyy, and yyyyMMdd date patterns. Choose R for other supported numeric date patterns.")
+        "yyyy-MM-dd" or "yyyy/MM/dd" or "yyyy-M-d" or "yyyy/M/d" => "yymmdd10.",
+        // SAS's MMDDYY/DDMMYY informats also read one-digit months and days (3/5/2025).
+        "MM/dd/yyyy" or "MM-dd-yyyy" or "M/d/yyyy" or "M-d-yyyy" => "mmddyy10.",
+        "dd/MM/yyyy" or "dd-MM-yyyy" or "d/M/yyyy" or "d-M-yyyy" => "ddmmyy10.", "yyyyMMdd" => "yymmdd8.",
+        _ => throw new InvalidOperationException("SAS code currently supports yyyy-MM-dd, yyyy/MM/dd, MM/dd/yyyy, M/d/yyyy, dd/MM/yyyy, d/M/yyyy, and yyyyMMdd date patterns. Choose R for other supported numeric date patterns.")
     };
 
     /// <summary>Valid, unique SAS names (letters, digits, underscores; at most 32 characters; never starting with an underscore).</summary>
@@ -70,8 +72,9 @@ public static class SasRecipe
             if (allValues.Any(v => v.Contains('\r') || v.Contains('\n') || v.Contains('\0'))) throw new InvalidOperationException("SAS code cannot yet read multiline/control-character CSV values. Choose R for this dataset.");
             if (allValues.Any(v => v.Length > 0 && v != v.Trim())) throw new InvalidOperationException("SAS fixed-width characters cannot reproduce leading/trailing-whitespace distinctions in these sources. Choose R for exact text handling.");
             if (allValues.Any(v => Bytes(v) > 32767)) throw new InvalidOperationException("A value exceeds SAS's 32,767-byte character limit. Choose R.");
+            if (source.SkippedRows.SelectMany(r => r).Any(v => v.Contains('\r') || v.Contains('\n'))) throw new InvalidOperationException("The description rows under this file's header contain line breaks, which SAS cannot skip reliably. Choose R for this dataset.");
             if (source.Fields.Any(f => Bytes(f.Original) > 256)) throw new InvalidOperationException("A source header exceeds SAS's 256-byte label limit. Choose R.");
-            foreach (var step in source.Steps.Where(s => s.Kind == StepKind.Convert && s.Target == ValueKind.Date && !source.IsKeyColumn(s.Column))) _ = DateInformat(step.DateFormat);
+            foreach (var step in source.Steps.Where(s => s.Kind == StepKind.Convert && s.Target == ValueKind.Date)) _ = DateInformat(step.DateFormat);
         }
         if (plan.Filter.Contains('\r') || plan.Filter.Contains('\n')) throw new InvalidOperationException("Choose R for a multiline row filter.");
         if (plan.Columns.Any(c => Bytes(c.Field.Name) > 256)) throw new InvalidOperationException("An output name exceeds SAS's 256-byte label limit. Choose R.");
@@ -87,13 +90,17 @@ public static class SasRecipe
 
         // ---- 1. Read ----
         string? folder = m.CommonFolder(portablePaths);
+        // & and % start macro references, ; ends the %let statement, and quotes/parentheses unbalance it. Paths with any of
+        // these are written out in full as single-quoted strings, which SAS never resolves.
+        static bool MacroSafe(string text) => text.IndexOfAny(['&', '%', ';', '\'', '"', '(', ')']) < 0;
+        if (folder != null && (!MacroSafe(folder) || m.Files.Any(f => !MacroSafe(CodeModel.DiskName(f, portablePaths))))) folder = null;
         L("/* ---- 1. Read the original files (every column as text, so codes and leading zeros survive) ---- */");
         L(folder != null ? $"%let folder = {folder};  /* where the original files are */" : portablePaths || m.Files.All(f => f.Source.ImportPath == null) ? "%let folder = C:\\path\\to\\files;  /* edit: the folder holding the original files */" : "");
         bool useFolder = folder != null || portablePaths || m.Files.All(f => f.Source.ImportPath == null);
         foreach (var f in m.Files)
         {
-            var s = f.Source; var raw = Names(s.Fields.Select(x => x.Original));
-            string file = useFolder ? $"\"&folder\\{s.Name}\"" : Q(s.ImportPath ?? s.Name);
+            var s = f.Source; var raw = Names(s.Fields.Select(x => x.Original)).Take(s.FileColumns).ToList();
+            string file = useFolder ? $"\"&folder\\{CodeModel.DiskName(f, portablePaths)}\"" : Q(s.ImportPath ?? s.Name);
             string encoding = s.EncodingName switch { "windows-1252" => "wlatin1", "UTF-16LE" => "utf-16le", _ => "utf-8" };
             string dlm = s.Delimiter switch { ',' => "", '\t' => " dlm='09'x", _ => $" dlm={Q(s.Delimiter.ToString())}" };
             long lrecl = Math.Max(32767, s.OriginalRows!.Select(r => r.Sum(v => (long)Bytes(Csv.Escape(v))) + r.Length + 1024).DefaultIfEmpty(1).Max() * 2);
@@ -101,7 +108,9 @@ public static class SasRecipe
             L($"  infile {file} dsd{dlm} firstobs=2 truncover lrecl={lrecl} encoding={Q(encoding)};");
             L("  length " + string.Join(" ", raw.Select((n, c) => $"{n} ${f.Widths[c]}")) + ";");
             L("  input @; if _infile_ = '' then delete;  /* skip blank lines */");
+            if (s.SkipRows > 0) L($"  _dh_skip + 1; if _dh_skip <= {s.SkipRows} then delete;  /* skip {s.SkipRows} description row{(s.SkipRows == 1 ? "" : "s")} under the header */");
             L("  input " + string.Join(" ", raw) + ";");
+            if (s.SkipRows > 0) L("  drop _dh_skip;");
             var readLabels = raw.Select((n, c) => (n, s.Fields[c].Original)).Where(x => x.n != x.Original).ToList();
             if (readLabels.Count > 0) L("  label " + string.Join(" ", readLabels.Select(x => $"{x.n} = {Q(x.Original)}")) + ";");
             L("run;");
@@ -115,7 +124,7 @@ public static class SasRecipe
             var raw = Names(s.Fields.Select(x => x.Original));
             var final = Names(s.Fields.Select(x => x.Name)); fin[f] = final;
             var cur = raw.ToArray(); var kind = new ValueKind[n];
-            var pdv = new HashSet<string>(raw, StringComparer.OrdinalIgnoreCase);
+            var pdv = new HashSet<string>(raw.Take(s.FileColumns), StringComparer.OrdinalIgnoreCase);  // scale scores join the PDV when computed
             var helpers = new List<string>(); int arrays = 0;
             string Fresh(string name) { string root = name[..Math.Min(name.Length, 30)] + "_n"; string candidate = root; int k = 2; while (pdv.Contains(candidate)) { string suffix = "_" + k++; candidate = name[..Math.Min(name.Length, 32 - 2 - suffix.Length)] + "_n" + suffix; } pdv.Add(candidate); return candidate; }
             bool needsStep = f.Ops.Count > 0 || Enumerable.Range(0, n).Any(c => raw[c] != final[c]);
@@ -185,6 +194,27 @@ public static class SasRecipe
                         else for (int i = 0; i < olds.Count; i++) L("  " + Tokens(olds[i]) + Assign(olds[i], news[i]));
                         if (convert.Target == ValueKind.Date) L("  format " + string.Join(" ", news) + " yymmdd10.;");
                         for (int i = 0; i < convert.Cols.Count; i++) cur[convert.Cols[i]] = news[i];
+                        break;
+                    }
+                    case KeyNormalizeOp key:
+                    {
+                        string x = cur[key.Col];
+                        L($"  /* Matching column {s.Fields[key.Col].Original}: {(key.Target == ValueKind.Number ? "as numbers (00001 -> 1)" : key.Target == ValueKind.Date ? $"as dates (written as {key.DateFormat})" : "as true/false")}; kept as text until the files are combined */");
+                        L("  " + key.Target switch
+                        {
+                            ValueKind.Number => $"if not missing({x}) then {x} = strip(put(input({x}, best32.), best32.));",
+                            ValueKind.Date => $"if not missing({x}) then {x} = put(input({x}, {DateInformat(key.DateFormat)}), yymmdd10.);",
+                            _ => $"if lowcase({x}) in ('true', 'yes', '1') then {x} = 'true'; else if lowcase({x}) in ('false', 'no', '0') then {x} = 'false';"
+                        });
+                        break;
+                    }
+                    case ScaleOp scale:
+                    {
+                        var sc = scale.Scale; string range = (sc.ReverseMin + sc.ReverseMax).ToString(CultureInfo.InvariantCulture);
+                        var terms = scale.Items.Select(c => sc.Reversed.Contains(s.Fields[c].Original, StringComparer.Ordinal) ? $"{range} - {cur[c]}" : cur[c]).ToList();
+                        L($"  /* Scale score {s.Fields[scale.Col].Name}: {sc.Describe()} */");
+                        pdv.Add(cur[scale.Col]);
+                        L($"  if n({string.Join(", ", terms)}) >= {sc.MinItems} then {cur[scale.Col]} = {(sc.Method == ScaleMethod.Sum ? "sum" : "mean")}({string.Join(", ", terms)}); else {cur[scale.Col]} = .;");
                         break;
                     }
                     case MissingOp missing:
@@ -476,6 +506,22 @@ public static class SasRecipe
             L("quit;");
             current = "wide"; currentNames = wideNames; currentRaw = m.Raw.Fields.Select(x => x.Name).ToList(); helperCols = ["_first"];
         }
+        else if (m.Plan.Layout == Layout.Dyad)
+        {
+            var roles = Engine.DyadPair(Engine.Roles(plan.Session), plan.Session.DyadRoles);
+            var partnerFields = m.Raw.Fields.Where(x => x.Key.EndsWith(Engine.PartnerSuffix, StringComparison.Ordinal)).ToList();
+            var partnerNames = Names(partnerFields.Select(x => x.Name), currentNames.Concat(helperCols));
+            L(); L($"/* ---- Dyads: {roles[0]} and {roles[1]} rows, each with the partner's values in *_partner columns ---- */");
+            L("proc sql;");
+            L("  create table dyad as");
+            L("  select a.*" + string.Concat(partnerFields.Select((x, i) => $", b.{Lookup(m.Labels[x.Key[..^Engine.PartnerSuffix.Length]])} as {partnerNames[i]}")));
+            L("  from combined as a");
+            L($"       left join combined as b on b.{idN} = a.{idN} and b.{gN} = a.{gN} and b.{eN} = case a.{eN} when {Q(roles[0])} then {Q(roles[1])} else {Q(roles[0])} end");
+            L($"  where a.{eN} in ({Q(roles[0])}, {Q(roles[1])})");
+            L("  order by a._first, a._porder, a._order;");
+            L("quit;");
+            current = "dyad"; currentNames.AddRange(partnerNames); currentRaw.AddRange(partnerFields.Select(x => x.Name));
+        }
         else if (measurement)
         {
             var valueField = m.RawField("@value")!;
@@ -513,6 +559,8 @@ public static class SasRecipe
         string Pdv(string rawName) => Lookup(rawName);
         var finalNames = Names(m.Plan.Columns.Select(c => c.Field.Name), ["_blank1", "_sort1"]);
         L(); L("/* ---- 4. Final columns, names, filters and sorting ---- */");
+        var (formatCode, formats) = Export.SasFormats(plan.Columns.Select(c => c.Field).ToList());
+        if (formatCode.Length > 0) { L("/* Value labels */"); foreach (var line in formatCode.TrimEnd('\n').Split('\n')) L(line); }
         L($"data {outName};");
         if (!wanted.Select(Pdv).SequenceEqual(currentNames.Where(x => wanted.Select(Pdv).Contains(x))) || KeyTypes(m).Count > 0) L("  retain " + string.Join(" ", wanted.Select(Pdv)) + ";  /* column order */");
         var keyFields = KeyTypes(m);
@@ -564,6 +612,7 @@ public static class SasRecipe
         }
         var labels = m.Plan.Columns.Select((c, i) => (c, i)).Where(x => finalNames[x.i] != x.c.Field.Name).Select(x => $"{Pdv(wanted[x.i])} = {Q(x.c.Field.Name)}").ToList();
         if (labels.Count > 0) L("  label " + string.Join(" ", labels) + ";");
+        if (formats.Count > 0) L("  format " + string.Join(" ", formats.Select(p => $"{Pdv(wanted[p.Key])} {p.Value}.")) + ";  /* value labels */");
         var renames2 = wanted.Select((w, i) => (From: Pdv(w), To: finalNames[i])).Where(x => !x.From.Equals(x.To, StringComparison.Ordinal)).Select(x => $"{x.From} = {x.To}").ToList();
         if (renames2.Count > 0) L("  rename " + string.Join(" ", renames2) + ";");
         var drops = helperCols.Concat(setRenames.Select(k => k.Temp)).ToList();

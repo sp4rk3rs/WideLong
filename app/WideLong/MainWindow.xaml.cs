@@ -57,6 +57,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Title = $"WideLong {CodeModel.Version} · local data preparation"; VersionLabel.Text = "PROTOTYPE " + CodeModel.Version;
         var screen=SystemParameters.WorkArea;
         MinWidth=Math.Min(MinWidth,screen.Width);MinHeight=Math.Min(MinHeight,screen.Height);
         Width=Math.Min(Width,screen.Width);Height=Math.Min(Height,screen.Height);
@@ -75,6 +76,8 @@ public partial class MainWindow : Window
         PreviewKeyDown += (_, e) =>
         {
             if (Keyboard.Modifiers != ModifierKeys.Control) return;
+            // While typing (search boxes, a grid cell being edited, dialogs' inputs), Ctrl+Z/Y undo the typing, not data changes.
+            if (e.Key is Key.Z or Key.Y && Keyboard.FocusedElement is TextBoxBase or PasswordBox) return;
             if (e.Key == Key.Z) { Undo_Click(this, new()); e.Handled = true; }
             if (e.Key == Key.Y) { Redo_Click(this, new()); e.Handled = true; }
             if (e.Key == Key.O) { Import_Click(this, new()); e.Handled = true; }
@@ -86,7 +89,7 @@ public partial class MainWindow : Window
 
     public void StartSyntheticCheck(bool compound=false)
     {
-        Title = "WideLong 0.5.3 · synthetic verification"+(compound?" · compound keys":"");
+        Title = $"WideLong {CodeModel.Version} · synthetic verification"+(compound?" · compound keys":"");
         session = compound?Examples.CompoundFixture():Demo.Create(); selectedSource = session.Sources[0];
         ExampleLabel.Visibility = Visibility.Visible; ExampleName.Text = compound ? "Household" : "Health study";
         RenderSources(); _ = RefreshPreview(); Status.Text = compound?"Fictional household example · ID + person + time · imports disabled":"Fictional study · 600 participants · imports disabled in this verification window";
@@ -166,7 +169,7 @@ public partial class MainWindow : Window
     }
     private void Change(Action action, string status)
     {
-        Remember(); var before=undo.Peek(); action(); RecordDataChange(before,status); Status.Text = status; RenderSources(); _ = RefreshPreview();
+        Remember(); var before=undo.Peek(); action(); foreach (var s in session.Sources) Scales.Refresh(s); RecordDataChange(before,status); Status.Text = status; RenderSources(); _ = RefreshPreview();
     }
 
     private async Task RefreshPreview(bool rebuild = true, bool resetPage = false)
@@ -385,28 +388,44 @@ public partial class MainWindow : Window
         var delimiter = dialog.Choice("Columns are separated by", ["Comma (,)", "Semicolon (;)", "Tab", "Pipe (|)"], picker.FileNames.All(f => Path.GetExtension(f).Equals(".tsv", StringComparison.OrdinalIgnoreCase)) ? 2 : 0);
         var missing = MissingControls(dialog, new HashSet<string> { "" });
         var encoding = dialog.Choice("Text encoding", ["UTF-8", "UTF-16 little endian", "Windows-1252"], 0);
+        var preset = dialog.Choice("File comes from", ["Detect automatically (recommended)", "A plain CSV: data starts on the second line", "Qualtrics: skip the 2 description rows under the header", "REDCap: record_id is the ID, redcap_event_name the time"], 0);
         dialog.Description("The first row contains column names. Values start as text so leading zeros and literal NA/NULL are preserved.");
         if (dialog.Finish("Import") != true) return;
         try
         {
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
             Encoding decoder = encoding.SelectedIndex switch { 1 => new UnicodeEncoding(false, true, true), 2 => Encoding.GetEncoding(1252, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback), _ => new UTF8Encoding(false, true) };
-            char separator = new[] { ',', ';', '\t', '|' }[delimiter.SelectedIndex]; var imported = new List<Source>();
+            char separator = new[] { ',', ';', '\t', '|' }[delimiter.SelectedIndex]; var imported = new List<Source>(); var skipped = new List<string>();
             foreach (string path in picker.FileNames)
             {
                 using var reader = new StreamReader(path, decoder, detectEncodingFromByteOrderMarks: false);
-                var source = Csv.Import(reader.ReadToEnd(), Path.GetFileName(path), separator); source.ImportPath = Path.GetFullPath(path);
+                int? skip = preset.SelectedIndex switch { 0 => null, 2 => 2, _ => 0 };
+                var source = Csv.Import(reader.ReadToEnd(), Path.GetFileName(path), separator, skip); source.ImportPath = Path.GetFullPath(path);
+                if (source.SkipRows > 0) skipped.Add(source.Name);
                 source.MissingTokens = ReadMissing(missing);
                 source.EncodingName = encoding.SelectedIndex switch { 1 => "UTF-16LE", 2 => "windows-1252", _ => "UTF-8" };
-                string root = Path.GetFileNameWithoutExtension(source.Name); int n = 2;
-                while (session.Sources.Concat(imported).Any(s => s.Name == source.Name)) source.Name = root + " (" + n++ + ").csv";
+                // A second copy of a name gets a distinct display name; the cleaning code still reads the real file (ImportPath).
+                string root = Path.GetFileNameWithoutExtension(source.Name), extension = Path.GetExtension(source.Name); int n = 2;
+                while (session.Sources.Concat(imported).Any(s => s.Name == source.Name)) source.Name = root + " (" + n++ + ")" + extension;
                 imported.Add(source);
             }
-            Change(() => { session.Sources.AddRange(imported); KeyRecommendations.Recommend(session); selectedSource = imported[0]; ExampleLabel.Visibility = Visibility.Collapsed; }, $"Imported {imported.Count} file(s) · review ID / grouping");
+            int extended = 0;
+            Change(() => { session.Sources.AddRange(imported); KeyRecommendations.Recommend(session); extended = ResponseFilters.ExtendKeyFilters(session, imported); selectedSource = imported[0]; ExampleLabel.Visibility = Visibility.Collapsed; }, $"Imported {imported.Count} file(s) · review ID / grouping");
+            if (extended > 0) Status.Text += " · existing response filters on matching columns now also apply to the new file(s)";
+            if (skipped.Count > 0) Status.Text += $" · skipped the description rows under the header in {string.Join(", ", skipped.Take(3))}{(skipped.Count > 3 ? ", …" : "")}";
             OfferNumericTypes(imported);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DecoderFallbackException or InvalidOperationException or OutOfMemoryException)
-        { MessageBox.Show(this, ex is OutOfMemoryException ? "Not enough memory to import these files. Nothing was saved." : ex.Message, "Import not completed", MessageBoxButton.OK, MessageBoxImage.Warning); }
+        {
+            string message = ex switch
+            {
+                OutOfMemoryException => "Not enough memory to import these files. Nothing was saved.",
+                DecoderFallbackException when encoding.SelectedIndex == 0 => "A file is not valid UTF-8 text. Files saved from Excel as \"CSV (Comma delimited)\" usually use Windows-1252: import again and choose Windows-1252 under Text encoding. Nothing was imported.",
+                DecoderFallbackException => "A file could not be decoded with the chosen text encoding. Import again and try UTF-8 or Windows-1252. Nothing was imported.",
+                _ => ex.Message
+            };
+            MessageBox.Show(this, message, "Import not completed", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void SourceSettings(Source source)
@@ -454,6 +473,7 @@ public partial class MainWindow : Window
     {
         if (e.EditAction != DataGridEditAction.Commit || busy) return;
         var origin = CellOrigin(e.Row, e.Column); if (origin == null) { e.Cancel = true; return; }
+        if (session.Sources.Single(s => s.Key == origin.SourceKey).IsDerived(origin.Column)) { e.Cancel = true; ShowNotice("Scale scores are computed from their items. Edit the items, or right-click the scale → Edit scale…"); return; }
         var source = session.Sources.Single(s => s.Key == origin.SourceKey); var field = source.Fields[origin.Column]; string value;
         try { value = Values.ConvertWithMissing(((TextBox)e.EditingElement).Text, field.Kind, "yyyy-MM-dd", source.EffectiveMissingTokens(origin.Column)); }
         catch (InvalidOperationException ex) { e.Cancel = true; MessageBox.Show(this, ex.Message); return; }
@@ -480,7 +500,7 @@ public partial class MainWindow : Window
         var nameBox = options.Input("Dataset name", suggested);
         var nameHint = new TextBlock { FontSize = 11, Foreground = (Brush)FindResource("Muted"), Margin = new(0, 4, 0, 4), TextWrapping = TextWrapping.Wrap }; options.Add(nameHint);
         var shapes = new List<(string Label, Layout? Shape)> { ("Wide", Layout.Person), ("Long", Layout.PersonTime), ("Both — wide and long (ZIP)", null) };
-        if (layout is Layout.Measurement or Layout.Source) shapes.Add((ShapeName(layout), layout));
+        if (layout is Layout.Measurement or Layout.Source or Layout.Dyad) shapes.Add((ShapeName(layout), layout));
         Layout? chosen = layout; Action refresh = () => { };
         foreach (var item in shapes) {
             bool current = item.Shape == layout;

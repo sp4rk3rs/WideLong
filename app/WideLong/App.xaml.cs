@@ -8,7 +8,10 @@ public partial class App : Application
     {
         DispatcherUnhandledException += (_, args) =>
         {
-            MessageBox.Show("The operation could not be completed. No recovery file or error report was saved. Your original files are unchanged.", "WideLong", MessageBoxButton.OK, MessageBoxImage.Error);
+            // Show what went wrong (the message only, never data or a stack trace). Nothing is logged or sent anywhere.
+            var ex = args.Exception is System.Reflection.TargetInvocationException { InnerException: { } inner } ? inner : args.Exception;
+            string detail = ex is OutOfMemoryException ? "There was not enough memory. Select fewer columns or smaller files." : $"{ex.Message} ({ex.GetType().Name})";
+            MessageBox.Show("The operation could not be completed.\n\n" + detail + "\n\nNo recovery file or error report was saved. Your original files are unchanged; Undo is still available.", "WideLong", MessageBoxButton.OK, MessageBoxImage.Error);
             args.Handled = true;
         };
         base.OnStartup(e);
