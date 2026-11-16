@@ -26,14 +26,14 @@ Build first (see [Build and verify](#build-and-verify)). Then double-click **Sta
 
 Open **Examples…** and choose a structure resembling your files. Every example is fictional; no data loads automatically.
 
-| Example | Files and structure | Useful first action |
-| --- | --- | --- |
-| Health study | 600 participants in five files: demographics and enrollment (one row per person), visits and lab results (long), and 42 wide health-measurement columns | Switch between ID and ID + visit |
-| School | 120 students in five files: student details, wide grades, and long attendance, behavior and reading logs per term | Match grades to attendance by term |
-| Shop | 80 customers in five files: customers, orders, returns, support tickets and loyalty details | Sort by region and order total |
-| Monthly reports | Five matching department-budget files (January–May) | Stack rows while retaining source labels |
-| Messy survey | 60 respondents in five files; leading-zero IDs, missing-value codes, yes/no, repeated scores and follow-up calls | Accept the numbers prompt, set missing-value codes, and export cleaning code |
-| Household | Four households in five files; ID-only details and contacts, person details, long questionnaires and role-specific wide scores; Mother/Father/Child share IDs | Match ID + person + time; right-click person → Filter responses… to leave out Child |
+| Example | Files and structure |
+| --- | --- |
+| Health study | 600 participants in five files: demographics and enrollment (one row per person), visits and lab results (long), and 42 wide health-measurement columns |
+| School | 120 students in five files: student details, wide grades, and long attendance, behavior and reading logs per term |
+| Shop | 80 customers in five files: customers, orders, returns, support tickets and loyalty details |
+| Monthly reports | Five matching department-budget files (January–May) |
+| Messy survey | 60 respondents in five files; leading-zero IDs, missing-value codes, yes/no, repeated scores and follow-up calls |
+| Household | Four households in five files; ID-only details and contacts, person details, long questionnaires and role-specific wide scores; Mother/Father/Child share IDs |
 
 ## Workflow
 
